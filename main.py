@@ -92,11 +92,12 @@ CODES = {}
 
 @dataclass
 class Assembler:
+    isa: ISA
     ip: int
     code: list[tuple[int, str, list[int]]]
 
-    def __init__(self, core):
-        self.core = core
+    def __init__(self, isa: ISA):
+        self.isa = isa
         self.ip = 0
         self.code = []
         self.flags = set()
@@ -105,7 +106,7 @@ class Assembler:
     def push_instruction(self, name, args):
         out = self.ip
         self.ip += 1
-        signature = self.core.isa.instructions[name].args
+        signature = self.isa.instructions[name].args
         assert "out" in signature[0].split()
         assert len(args) == len(signature[1:]), f"{name} wrong number of arguments"
         if "flags" in signature[0].split():
@@ -141,8 +142,8 @@ class Listing:
         self.argnum = num_args(f) - 1
         self.kwargs = kwargs
 
-    def code(self, core):
-        l = Assembler(core)
+    def code(self, core: Core):
+        l = Assembler(core.isa)
         self.f(l, *range(-self.argnum, 0), **self.kwargs)
         return l.code
 
@@ -152,8 +153,8 @@ class Listing:
     def set_kwargs(self, kwargs):
         return Listing(self.f, kwargs)
 
-    def to_asm(self, core, name, fd, instances=1):
-        l = Assembler(core)
+    def to_asm(self, isa: ISA, name, fd, instances=1):
+        l = Assembler(isa)
         iargs = []
         oargs = []
         latency_ties = []
@@ -188,19 +189,19 @@ class Listing:
 
         at = {}
         for vreg in regs:
-            for preg in range(core.isa.registers):
+            for preg in range(isa.registers):
                 at[(vreg, preg)] = pulp.LpVariable(f"at_{vreg}_{preg}", cat=pulp.LpBinary)
 
         for vreg in regs:
             if vreg in l.flags: continue # Flags don't take up an ISA register
             # Each v-reg is in exactly one p-reg
-            model += sum(at[vreg, preg] for preg in range(core.isa.registers)) == 1
+            model += sum(at[vreg, preg] for preg in range(isa.registers)) == 1
 
         for reg1 in regs:
             for reg2 in regs:
                 if reg1 == reg2: break
                 if regstart[reg1] < regend[reg2] and regstart[reg2] < regend[reg1]:
-                    for preg in range(core.isa.registers):
+                    for preg in range(isa.registers):
                         # Can't put two interfering v-regs in the same p-reg
                         model += at[(reg1, preg)] + at[(reg2, preg)] <= 1
 
@@ -209,7 +210,7 @@ class Listing:
 
         assignment = {}
         for vreg in regs:
-            for preg in range(core.isa.registers):
+            for preg in range(isa.registers):
                 if at[(vreg, preg)].value() == 1:
                     assignment[vreg] = preg
         if VERBOSE: print("  Done in {:.02f}ms with {} registers".format(
@@ -223,17 +224,17 @@ class Listing:
         print(f"_{name}:", file=fd)
 
         # Prologue
-        if core.isa == ARM: # No need on x86, all xmm registers caller-saved
+        if isa == ARM: # No need on x86, all xmm registers caller-saved
             print("  stp    q8,  q9,  [sp, #-32]!", file=fd)
             print("  stp    q10, q11, [sp, #-32]!", file=fd)
             print("  stp    q12, q13, [sp, #-32]!", file=fd)
             print("  stp    q14, q15, [sp, #-32]!", file=fd)
 
-        if core.isa == ARM:
+        if isa == ARM:
             for ireg in iargs:
                 print(f"  fmov d{assignment[ireg]}, #0.0", file=fd)
-            print(f"  ldr x9, ={ASM_ITERATIONS}", file=fd) # Loop 1M times
-        elif core.isa == X86:
+            print(f"  ldr x9, ={ASM_ITERATIONS}", file=fd)
+        elif isa == X86:
             for ireg in iargs:
                 print(f"  xorpd xmm{assignment[ireg]}, xmm{assignment[ireg]}", file=fd)
             print(f"  mov r11, [rip+LOOP_ITERS]", file=fd)
@@ -241,9 +242,9 @@ class Listing:
         print(".p2align 4", file=fd)
         print("1:", file=fd)
 
-        PREFIX = core.isa.prefix
+        PREFIX = isa.prefix
         for out, op, args in l.code:
-            signature = core.isa.instructions[op]
+            signature = isa.instructions[op]
             arglist = []
             for arg, sig in zip([out] + list(args), signature.args):
                 if "flags" in sig.split():
@@ -251,30 +252,29 @@ class Listing:
                 elif isinstance(arg, str):
                     arglist.append(f"[rip+{arg}]")
                 else:
-                    arglist.append(core.isa.prefix + str(assignment[arg]))
+                    arglist.append(isa.prefix + str(assignment[arg]))
             if signature.suffix:
                 arglist.append(signature.suffix)
             print(f"  {op} {', '.join(arglist)}", file=fd)
 
         # At the tail we need to move output registers back into input
         # registers to enforce loop-carried dependency.
-        if core.isa == ARM:
+        if isa == ARM:
             for dst, src in latency_ties:
                 if assignment[dst] == assignment[src]: continue
                 print(f"  fmov d{assignment[dst]}, d{assignment[src]}", file=fd)
-        elif core.isa == X86:
+        elif isa == X86:
             for dst, src in latency_ties:
                 if assignment[dst] == assignment[src]: continue
                 print(f"  movsd xmm{assignment[dst]}, xmm{assignment[src]}", file=fd)
-            
-        if core.isa == ARM:
+
+        if isa == ARM:
             print("  subs x9, x9, #1", file=fd)
             print("  b.ne 1b", file=fd)
-        elif core.isa == X86:
+        elif isa == X86:
             print("  dec r11", file=fd)
             print("  jnz 1b", file=fd)
-            
-        if core.isa == ARM: # No need on x86, all xmm caller-saved
+        if isa == ARM: # No need on x86, all xmm caller-saved
             print("  ldp    q14, q15, [sp], #32", file=fd)
             print("  ldp    q12, q13, [sp], #32", file=fd)
             print("  ldp    q10, q11, [sp], #32", file=fd)
@@ -301,31 +301,32 @@ def algorithm(_func=None, **kwargs):
 
 @algorithm
 def fts(code, a, b):
-    if code.core.isa == ARM:
+    if code.isa == ARM:
         s = code.fadd(a, b)
         return s, code.fsub(b, code.fsub(s, a))
-    elif code.core.isa == X86:
+    elif code.isa == X86:
         s = code.vaddsd(a, b)
         return s, code.vsubsd(b, code.vsubsd(s, a))
 
+
 @algorithm
 def ts(code, a, b):
-    if code.core.isa == ARM:
+    if code.isa == ARM:
         s = code.fadd(a, b)
         bb = code.fsub(s, a)
         return s, code.fadd(code.fsub(a, code.fsub(s, bb)), code.fsub(b, bb))
-    elif code.core.isa == X86:
+    elif code.isa == X86:
         s = code.vaddsd(a, b)
         bb = code.vsubsd(s, a)
         return s, code.vaddsd(code.vsubsd(a, code.vsubsd(s, bb)), code.vsubsd(b, bb))
 
 def sort2(code, a, b):
-    if code.core.isa == ARM:
+    if code.isa == ARM:
         aa, ab = code.fabs(a), code.fabs(b)
         cond = code.fcmp(aa, ab)
         x = code.fcsel(cond, b, a)
         y = code.fcsel(cond, a, b)
-    elif code.core.isa == X86:
+    elif code.isa == X86:
         aa, ab = code.vandpd(a, "ABS_MASK"), code.vandpd(b, "ABS_MASK")
         cond = code.vcmpltsd(aa, ab)
         x = code.vblendvpd(a, b, cond)
@@ -333,27 +334,31 @@ def sort2(code, a, b):
     return x, y
 
 def add(code, a, b):
-    if code.core.isa == ARM:
+    if code.isa == ARM:
         return code.fadd(a, b)
-    elif code.core.isa == X86:
+    elif code.isa == X86:
         return code.vaddsd(a, b)
 
+
 def sub(code, a, b):
-    if code.core.isa == ARM:
+    if code.isa == ARM:
         return code.fsub(a, b)
-    elif code.core.isa == X86:
+    elif code.isa == X86:
         return code.vsubsd(a, b)
 
+
 def fabs(code, a):
-    if code.core.isa == ARM:
+    if code.isa == ARM:
         return code.fabs(a)
-    elif code.core.isa == X86:
+    elif code.isa == X86:
         return code.vandpd(a, "ABS_MASK")
+
 
 @algorithm
 def at0(code, a, b):
     a, b = sort2(code, a, b)
     return fts(code, a, b)
+
 
 @algorithm
 def at1(code, a, b):
@@ -361,21 +366,23 @@ def at1(code, a, b):
     a, b = sort2(code, a, b)
     return s, sub(code, b, sub(code, s, a))
 
+
 @algorithm
 def at2(code, a, b):
     s = add(code, a, b)
     aa = sub(code, s, b)
     bb = sub(code, s, a)
-    if code.core.isa == ARM:
+    if code.isa == ARM:
         cond = code.fcmp(code.fabs(b), code.fabs(a))
         x = code.fcsel(cond, b, a)
         xx = code.fcsel(cond, bb, aa)
-    elif code.core.isa == X86:
+    elif code.isa == X86:
         aa, ab = fabs(code, a), fabs(code, b)
         cond = code.vcmpltsd(aa, ab)
         x = code.vblendvpd(a, b, cond)
         xx = code.vblendvpd(aa, bb, cond)
     return s, sub(code, x, xx)
+
 
 @algorithm
 def at3(code, a, b):
@@ -383,10 +390,10 @@ def at3(code, a, b):
     ifa = sub(code, b, sub(code, s, a))
     ifb = sub(code, a, sub(code, s, b))
     aa, bb = fabs(code, a), fabs(code, b)
-    if code.core.isa == ARM:
+    if code.isa == ARM:
         cond = code.fcmp(aa, bb)
         return s, code.fcsel(cond, ifb, ifa)
-    elif code.core.isa == X86:
+    elif code.isa == X86:
         cond = code.vcmpltsd(aa, bb)
         return s, code.vblendvpd(ifa, ifb, cond)
 
@@ -413,14 +420,14 @@ def madd(code, x0, y0, x1, y1, *, ts=ts, ts2=fts):
 VERBOSE = False
 
 class CPU:
-    def __init__(self, core, code, instances):
+    def __init__(self, core: Core, code, instances):
         self.core = core
         self.code = code.code(core)
         self.instances = instances
 
         self.last = max(pc for pc, opcode, deps in self.code)
         self.status = {}
-        
+
         self.cycle = 0
         self.completions = 0
 
@@ -485,7 +492,7 @@ int main(void) {
 #else
     uint64_t end = __builtin_ia32_rdtsc();
 #endif
-    uint64_t baseline = 0;//end - start;
+    uint64_t baseline = end - start;
 
 #ifdef __APPLE__
     start = mach_absolute_time();
@@ -528,8 +535,8 @@ def compile_run(code, core, instances=1):
                 print(f"  .quad {ASM_ITERATIONS}", file=f)
                 print(file=f)
 
-            Listing(lambda code: (), {}).to_asm(core, "null_loop", f)
-            code.to_asm(core, "bench_loop", f, instances=instances)
+            Listing(lambda code: (), {}).to_asm(core.isa, "null_loop", f)
+            code.to_asm(core.isa, "bench_loop", f, instances=instances)
         with open(c_file, "w") as f:
             f.write(DRIVER)
         if VERBOSE: print(open(asm_file).read())
