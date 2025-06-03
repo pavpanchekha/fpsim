@@ -9,35 +9,78 @@ import subprocess
 import sys
 import time
 
-REGISTERS = 32
+@dataclass
+class Sig:
+    args : list[str]
+    suffix : typing.Union[None, str]
+    
+    def __init__(self, *args, suffix=None):
+        self.args = args
+        self.suffix = suffix
 
-PCORE = {
+@dataclass
+class ISA:
+    registers : int
+    prefix : str
+    instructions: dict[str, list[str]]
+
+ARM = ISA(
+    registers = 32,
+    prefix = "d",
+    instructions = {
+        "fadd": Sig("out", "in", "in"),
+        "fsub": Sig("out", "in", "in"),
+        "fabs": Sig("out", "in"),
+        "fcmp": Sig("out flags", "in", "in"),
+        "fcsel": Sig("out", "in flags", "in", "in", suffix="lt")
+    }
+)
+
+X86 = ISA(
+    registers = 16,
+    prefix = "xmm",
+    instructions = {
+        "vaddsd": Sig("out", "in", "in"),
+        "vsubsd": Sig("out", "in", "in"),
+        "vandpd": Sig("out", "in", "const"),
+        "vcmpltsd": Sig("out", "in", "in"),
+        "vpcmpgtq": Sig("out", "in", "in"),
+        "vblendvpd": Sig("out", "in", "in", "in"),
+    },
+)
+
+@dataclass
+class Core:
+    isa : ISA
+    latencies : dict[str, tuple[int, list[int]]]
+    priority : list[int]
+
+# Apple M1
+PCORE = Core(ARM, {
     "fadd": (3, [11, 12, 13, 14]),
     "fsub": (3, [11, 12, 13, 14]),
     "fabs": (2, [11, 12, 13, 14]),
     "fcmp": (2, [11]),
     "fcsel": (2, [13, 14]),
-}
+}, priority=[12, 13, 14, 11])
 
-ECORE = {
+ECORE = Core(ARM, {
     "fadd": (3, [6, 7]),
     "fsub": (3, [6, 7]),
     "fabs": (2, [6, 7]),
     "fcmp": (2, [6]),
     "fcsel": (2, [6, 7]),
-}
-
-UNIT_ORDER = [0, 1, 5, 7, 6, 12, 13, 14, 11]
+}, priority = [7, 6])
 
 # Coffee Lake
-CL_CORE = {
+CL_CORE = Core(X86, {
     "vaddsd": (4, [0, 1]),
     "vsubsd": (4, [0, 1]),
     "vandpd": (1, [0, 1, 5]),
     "vcmpltsd": (4, [0, 1]),
     "vpcmpgtq": (3, [5]),
     "vblendvpd": (2, [0, 1, 5]),
-}
+}, priority=[0, 1, 5])
 
 CORES = {
     "E": ECORE,
@@ -52,8 +95,8 @@ class Assembler:
     ip: int
     code: list[tuple[int, str, list[int]]]
 
-    def __init__(self, language="arm"):
-        self.language = language
+    def __init__(self, core):
+        self.core = core
         self.ip = 0
         self.code = []
         self.flags = set()
@@ -62,13 +105,21 @@ class Assembler:
     def push_instruction(self, name, args):
         out = self.ip
         self.ip += 1
-        self.code.append([out, name, args])
-        if name == "fcmp":
+        signature = self.core.isa.instructions[name].args
+        assert "out" in signature[0].split()
+        assert len(args) == len(signature[1:]), f"{name} wrong number of arguments"
+        if "flags" in signature[0].split():
             self.flags.add(out)
             self.curflags = out
-        elif name == "fcsel":
-            assert args[0] in self.flags, "fcsel argument is not a flags register"
-            assert args[0] == self.curflags, "fcsel argument is not current flags"
+        for arg, sig in zip(args, signature[1:]):
+            if "flags" in sig.split():
+                assert arg in self.flags, f"{name} argument not a flags register"
+                assert arg == self.curflags, f"{name} argument is not current flags"
+            elif "const" in sig.split():
+                assert isinstance(arg, str), f"{name} argument not a constant"
+            elif "in" in sig.split():
+                assert isinstance(arg, int), f"{name} argument not a register"
+        self.code.append([out, name, args])
         return out
 
     def __getattr__(self, name):
@@ -91,7 +142,7 @@ class Listing:
         self.kwargs = kwargs
 
     def code(self, core):
-        l = Assembler("arm" if "fadd" in core else "x86")
+        l = Assembler(core)
         self.f(l, *range(-self.argnum, 0), **self.kwargs)
         return l.code
 
@@ -102,7 +153,7 @@ class Listing:
         return Listing(self.f, kwargs)
 
     def to_asm(self, core, name, fd, instances=1):
-        l = Assembler("arm" if "fadd" in core else "x86")
+        l = Assembler(core)
         iargs = []
         oargs = []
         latency_ties = []
@@ -135,23 +186,21 @@ class Listing:
         start = time.time()
         model = pulp.LpProblem(sense=pulp.LpMinimize)
 
-        REGISTERS = 32 if l.language == "arm" else 16 # TODO: Abstract
-
         at = {}
         for vreg in regs:
-            for preg in range(REGISTERS):
+            for preg in range(core.isa.registers):
                 at[(vreg, preg)] = pulp.LpVariable(f"at_{vreg}_{preg}", cat=pulp.LpBinary)
 
         for vreg in regs:
             if vreg in l.flags: continue # Flags don't take up an ISA register
             # Each v-reg is in exactly one p-reg
-            model += sum(at[vreg, preg] for preg in range(REGISTERS)) == 1
+            model += sum(at[vreg, preg] for preg in range(core.isa.registers)) == 1
 
         for reg1 in regs:
             for reg2 in regs:
                 if reg1 == reg2: break
                 if regstart[reg1] < regend[reg2] and regstart[reg2] < regend[reg1]:
-                    for preg in range(REGISTERS):
+                    for preg in range(core.isa.registers):
                         # Can't put two interfering v-regs in the same p-reg
                         model += at[(reg1, preg)] + at[(reg2, preg)] <= 1
 
@@ -160,7 +209,7 @@ class Listing:
 
         assignment = {}
         for vreg in regs:
-            for preg in range(REGISTERS):
+            for preg in range(core.isa.registers):
                 if at[(vreg, preg)].value() == 1:
                     assignment[vreg] = preg
         if VERBOSE: print("  Done in {:.02f}ms with {} registers".format(
@@ -174,17 +223,17 @@ class Listing:
         print(f"_{name}:", file=fd)
 
         # Prologue
-        if l.language == "arm": # No need on x86, all xmm registers caller-saved
+        if core.isa == ARM: # No need on x86, all xmm registers caller-saved
             print("  stp    q8,  q9,  [sp, #-32]!", file=fd)
             print("  stp    q10, q11, [sp, #-32]!", file=fd)
             print("  stp    q12, q13, [sp, #-32]!", file=fd)
             print("  stp    q14, q15, [sp, #-32]!", file=fd)
 
-        if l.language == "arm":
+        if core.isa == ARM:
             for ireg in iargs:
                 print(f"  fmov d{assignment[ireg]}, #0.0", file=fd)
             print(f"  ldr x9, ={ASM_ITERATIONS}", file=fd) # Loop 1M times
-        elif l.language == "x86":
+        elif core.isa == X86:
             for ireg in iargs:
                 print(f"  xorpd xmm{assignment[ireg]}, xmm{assignment[ireg]}", file=fd)
             print(f"  mov r11, [rip+LOOP_ITERS]", file=fd)
@@ -192,46 +241,40 @@ class Listing:
         print(".p2align 4", file=fd)
         print("1:", file=fd)
 
-        PREFIX = "d" if l.language == "arm" else "xmm"
+        PREFIX = core.isa.prefix
         for out, op, args in l.code:
-            if op == "fcmp":
-                argstr = ", ".join(f"{PREFIX}{assignment[arg]}" for arg in args)
-                print(f"  {op} {argstr}", file=fd) # Don't use flag register
-            elif op == "fcsel":
-                argstr = ", ".join(f"{PREFIX}{assignment[arg]}" for arg in args if arg not in l.flags)
-                print(f"  {op} {PREFIX}{assignment[out]}, {argstr}, gt", file=fd)
-            elif op == "vandpd":
-                arglist = []
-                for arg in args:
-                    if isinstance(arg, int):
-                        arglist.append(PREFIX + str(assignment[arg]))
-                    elif isinstance(arg, str):
-                        arglist.append(f"[rip+{arg}]")
-                argstr = ", ".join(arglist)
-                print(f"  {op} {PREFIX}{assignment[out]}, {argstr}", file=fd)
-            else:
-                argstr = ", ".join(f"{PREFIX}{assignment[arg]}" for arg in args)
-                print(f"  {op} {PREFIX}{assignment[out]}, {argstr}", file=fd)
+            signature = core.isa.instructions[op]
+            arglist = []
+            for arg, sig in zip([out] + list(args), signature.args):
+                if "flags" in sig.split():
+                    continue
+                elif isinstance(arg, str):
+                    arglist.append(f"[rip+{arg}]")
+                else:
+                    arglist.append(core.isa.prefix + str(assignment[arg]))
+            if signature.suffix:
+                arglist.append(signature.suffix)
+            print(f"  {op} {', '.join(arglist)}", file=fd)
 
         # At the tail we need to move output registers back into input
         # registers to enforce loop-carried dependency.
-        if l.language == "arm":
+        if core.isa == ARM:
             for dst, src in latency_ties:
                 if assignment[dst] == assignment[src]: continue
                 print(f"  fmov d{assignment[dst]}, d{assignment[src]}", file=fd)
-        elif l.language == "x86":
+        elif core.isa == X86:
             for dst, src in latency_ties:
                 if assignment[dst] == assignment[src]: continue
                 print(f"  movsd xmm{assignment[dst]}, xmm{assignment[src]}", file=fd)
             
-        if l.language == "arm":
+        if core.isa == ARM:
             print("  subs x9, x9, #1", file=fd)
             print("  b.ne 1b", file=fd)
-        elif l.language == "x86":
+        elif core.isa == X86:
             print("  dec r11", file=fd)
             print("  jnz 1b", file=fd)
             
-        if l.language == "arm": # No need on x86, all xmm caller-saved
+        if core.isa == ARM: # No need on x86, all xmm caller-saved
             print("  ldp    q14, q15, [sp], #32", file=fd)
             print("  ldp    q12, q13, [sp], #32", file=fd)
             print("  ldp    q10, q11, [sp], #32", file=fd)
@@ -258,31 +301,31 @@ def algorithm(_func=None, **kwargs):
 
 @algorithm
 def fts(code, a, b):
-    if code.language == "arm":
+    if code.core.isa == ARM:
         s = code.fadd(a, b)
         return s, code.fsub(b, code.fsub(s, a))
-    elif code.language == "x86":
+    elif code.core.isa == X86:
         s = code.vaddsd(a, b)
         return s, code.vsubsd(b, code.vsubsd(s, a))
 
 @algorithm
 def ts(code, a, b):
-    if code.language == "arm":
+    if code.core.isa == ARM:
         s = code.fadd(a, b)
         bb = code.fsub(s, a)
         return s, code.fadd(code.fsub(a, code.fsub(s, bb)), code.fsub(b, bb))
-    elif code.language == "x86":
+    elif code.core.isa == X86:
         s = code.vaddsd(a, b)
         bb = code.vsubsd(s, a)
         return s, code.vaddsd(code.vsubsd(a, code.vsubsd(s, bb)), code.vsubsd(b, bb))
 
 def sort2(code, a, b):
-    if code.language == "arm":
+    if code.core.isa == ARM:
         aa, ab = code.fabs(a), code.fabs(b)
         cond = code.fcmp(aa, ab)
-        x = code.fcsel(cond, a, b)
-        y = code.fcsel(cond, b, a)
-    elif code.language == "x86":
+        x = code.fcsel(cond, b, a)
+        y = code.fcsel(cond, a, b)
+    elif code.core.isa == X86:
         aa, ab = code.vandpd(a, "ABS_MASK"), code.vandpd(b, "ABS_MASK")
         cond = code.vcmpltsd(aa, ab)
         x = code.vblendvpd(a, b, cond)
@@ -290,21 +333,21 @@ def sort2(code, a, b):
     return x, y
 
 def add(code, a, b):
-    if code.language == "arm":
+    if code.core.isa == ARM:
         return code.fadd(a, b)
-    elif code.language == "x86":
+    elif code.core.isa == X86:
         return code.vaddsd(a, b)
 
 def sub(code, a, b):
-    if code.language == "arm":
+    if code.core.isa == ARM:
         return code.fsub(a, b)
-    elif code.language == "x86":
+    elif code.core.isa == X86:
         return code.vsubsd(a, b)
 
 def fabs(code, a):
-    if code.language == "arm":
+    if code.core.isa == ARM:
         return code.fabs(a)
-    elif code.language == "x86":
+    elif code.core.isa == X86:
         return code.vandpd(a, "ABS_MASK")
 
 @algorithm
@@ -323,11 +366,11 @@ def at2(code, a, b):
     s = add(code, a, b)
     aa = sub(code, s, b)
     bb = sub(code, s, a)
-    if code.language == "arm":
+    if code.core.isa == ARM:
         cond = code.fcmp(code.fabs(b), code.fabs(a))
-        x = code.fcsel(cond, a, b)
-        xx = code.fcsel(cond, aa, bb)
-    elif code.language == "x86":
+        x = code.fcsel(cond, b, a)
+        xx = code.fcsel(cond, bb, aa)
+    elif code.core.isa == X86:
         aa, ab = fabs(code, a), fabs(code, b)
         cond = code.vcmpltsd(aa, ab)
         x = code.vblendvpd(a, b, cond)
@@ -340,10 +383,10 @@ def at3(code, a, b):
     ifa = sub(code, b, sub(code, s, a))
     ifb = sub(code, a, sub(code, s, b))
     aa, bb = fabs(code, a), fabs(code, b)
-    if code.language == "arm":
+    if code.core.isa == ARM:
         cond = code.fcmp(aa, bb)
-        return s, code.fcsel(cond, ifa, ifb)
-    elif code.language == "x86":
+        return s, code.fcsel(cond, ifb, ifa)
+    elif code.core.isa == X86:
         cond = code.vcmpltsd(aa, bb)
         return s, code.vblendvpd(ifa, ifb, cond)
 
@@ -383,12 +426,12 @@ class CPU:
 
     def dispatch(self, instance, instruction, units):
         pc, opcode, deps = instruction
-        latency, ports = self.core[opcode]
+        latency, ports = self.core.latencies[opcode]
         if (instance, pc) in self.status:
             return None
         if not all(self.status.get((instance, dep)) == 0 for dep in deps if isinstance(dep, int) and dep >= 0):
             return None
-        for unit in UNIT_ORDER:
+        for unit in self.core.priority:
             if unit not in units and unit in ports:
                 if VERBOSE: print(f"[{self.cycle:>5}] {instance}%{pc} ({opcode}) start on u{unit}")
                 self.status[(instance, pc)] = latency
@@ -475,7 +518,7 @@ def compile_run(code, core, instances=1):
         o_file = str(Path(tmpdir) / "routine.o")
         exe_file = str(Path(tmpdir) / "routine")
         with open(asm_file, "w") as f:
-            if "fadd" not in core: # No need on ARM, assembler can manage constant pool
+            if core.isa == X86: # No need on ARM, assembler can manage constant pool
                 print(".intel_syntax noprefix", file=f)
                 print("    .section .note.GNU-stack,\"\",@progbits", file=f)
                 print(".section .rodata", file=f)
