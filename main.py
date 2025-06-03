@@ -183,7 +183,7 @@ class Listing:
             regend[arg] = l.ip # past end
             regs.add(arg)
 
-        if VERBOSE: print("Performing register allocation with PuPL")
+        if VERBOSE: print("Performing register allocation with PuLP")
         start = time.time()
         model = pulp.LpProblem(sense=pulp.LpMinimize)
 
