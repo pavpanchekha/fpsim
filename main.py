@@ -523,7 +523,7 @@ def main():
     parser = argparse.ArgumentParser(description="Simulate CPU performance for TwoSum variants.")
     parser.add_argument('--verbose', action='store_true', help='Enable verbose output')
     parser.add_argument('--core', type=str, default="P", choices=CORES.keys(), help='P-core or E-core')
-    parser.add_argument('--instances', type=int, default=12, help='Number of instances (default: 20)')
+    parser.add_argument('--instances', type=int, default=1, help='Number of instances')
     parser.add_argument('codes', nargs=argparse.REMAINDER, help='Functions to simulate')
     args = parser.parse_args()
 
@@ -537,7 +537,7 @@ def main():
     for name in codes:
         core = CORES[args.core]
         code = get_code(name)
-        measured = 0 #compile_run(code, core, args.instances) / ASM_ITERATIONS / args.instances
+        measured = compile_run(code, core, args.instances) / ASM_ITERATIONS / args.instances
         simulated = CPU(core, code.code(core), args.instances).simulate()
         metric = "throughput" if num_instances > 1 else "latency"
         print(f"{name:>20}: {simulated:.2f} simulated {metric}, {measured:.2f} measured {metric}")
