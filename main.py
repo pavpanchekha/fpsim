@@ -122,6 +122,10 @@ class Assembler:
                 assert isinstance(arg, int), f"{name} argument not a register"
         self.code.append([out, name, args])
         return out
+    
+    def exec(self, f, *args, **kwargs):
+        f(self, *args, **kwargs)
+        return self
 
     def __getattr__(self, name):
         return lambda *args: self.push_instruction(name, args)
@@ -141,11 +145,6 @@ class Listing:
         self.f = f
         self.argnum = num_args(f) - 1
         self.kwargs = kwargs
-
-    def code(self, core: Core):
-        l = Assembler(core.isa)
-        self.f(l, *range(-self.argnum, 0), **self.kwargs)
-        return l.code
 
     def __call__(self, code, *args):
         return self.f(code, *args, **self.kwargs)
@@ -422,7 +421,7 @@ VERBOSE = False
 class CPU:
     def __init__(self, core: Core, code, instances):
         self.core = core
-        self.code = code.code(core)
+        self.code = Assembler(core.isa).exec(code, *range(-code.argnum, 0)).code
         self.instances = instances
 
         self.last = max(pc for pc, opcode, deps in self.code)
