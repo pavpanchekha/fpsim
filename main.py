@@ -1,3 +1,4 @@
+import typing
 from dataclasses import dataclass
 from functools import wraps
 import inspect
@@ -346,9 +347,7 @@ def at3(code, a, b):
         cond = code.vcmpltsd(aa, bb)
         return s, code.vblendvpd(ifa, ifb, cond)
 
-TS=ts
-
-@algorithm(ts=TS)
+@algorithm(ts=ts)
 def ddadd(code, x0, y0, x1, y1, *, ts=ts):
     x0, y0 = ts(code, x0, y0)
     x1, y1 = ts(code, x1, y1)
@@ -358,7 +357,7 @@ def ddadd(code, x0, y0, x1, y1, *, ts=ts):
     x0, y0 = ts(code, x0, y0)
     return x0, y0
 
-@algorithm(ts=TS, ts2=fts)
+@algorithm(ts=ts, ts2=fts)
 def madd(code, x0, y0, x1, y1, *, ts=ts, ts2=fts):
     x0, y0 = ts(code, x0, y0)
     x1, y1 = ts(code, x1, y1)
@@ -373,10 +372,10 @@ VERBOSE = False
 class CPU:
     def __init__(self, core, code, instances):
         self.core = core
-        self.code = code
+        self.code = code.code(core)
         self.instances = instances
 
-        self.last = max(pc for pc, opcode, deps in code)
+        self.last = max(pc for pc, opcode, deps in self.code)
         self.status = {}
         
         self.cycle = 0
@@ -497,7 +496,7 @@ def compile_run(code, core, instances=1):
         res = subprocess.run([exe_file], stdout=subprocess.PIPE)
     out = res.stdout.decode("ascii").strip().split()
     assert len(out) == 3 and out[1] == "cycles" and out[2] == "elapsed"
-    return float(out[0])
+    return float(out[0]) / ASM_ITERATIONS / instances
 
 def get_code(name):
     if "[" in name:
@@ -537,8 +536,8 @@ def main():
     for name in codes:
         core = CORES[args.core]
         code = get_code(name)
-        measured = compile_run(code, core, args.instances) / ASM_ITERATIONS / args.instances
-        simulated = CPU(core, code.code(core), args.instances).simulate()
+        measured = compile_run(code, core, args.instances)
+        simulated = CPU(core, code, args.instances).simulate()
         metric = "throughput" if num_instances > 1 else "latency"
         print(f"{name:>20}: {simulated:.2f} simulated {metric}, {measured:.2f} measured {metric}")
 
