@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+import fpan
 
 @dataclass
 class Sig:
@@ -415,6 +416,10 @@ def madd(code, x0, y0, x1, y1, *, ts=ts, ts2=fts):
     y0     = add(code, y0, x1)
     x0, y0 = ts2(code, x0, y0)
     return x0, y0
+
+@algorithm(ts=ts, cts=ts, fts=fts, add=add)
+def fpan333(code, a, b, c, d, e, f, *, ts=ts, cts=ts, fts=fts, add=add):
+    return fpan.interpret(fpan.FPAN333)(code, a, b, c, d, e, f, ts=ts, cts=cts, fts=fts, add=add)
 
 VERBOSE = False
 
