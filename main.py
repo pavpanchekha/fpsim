@@ -588,6 +588,8 @@ def main():
     parser.add_argument('--verbose', action='store_true', help='Enable verbose output')
     parser.add_argument('--core', type=str, default="P", choices=CORES.keys(), help='P-core or E-core')
     parser.add_argument('--instances', type=int, default=1, help='Number of instances')
+    parser.add_argument('--mode', choices=['simulate', 'measure', 'both'], default='both',
+                        help='Run simulation, measurement, or both')
     parser.add_argument('codes', nargs=argparse.REMAINDER, help='Functions to simulate')
     args = parser.parse_args()
 
@@ -597,14 +599,19 @@ def main():
     num_instances = args.instances
     codes = args.codes if args.codes else CODES.keys()
 
-    # Simulate and print results for each core code
+    # Simulate and/or measure and print results
     for name in codes:
         core = CORES[args.core]
         code = get_code(name).replicate(num_instances)
-        measured = compile_run(code, core)
-        simulated = CPU(core, code).simulate()
         metric = "throughput" if num_instances > 1 else "latency"
-        print(f"{name:>20}: {simulated:.2f} simulated {metric}, {measured:.2f} measured {metric}")
+        results = []
+        if args.mode != "measure":
+            sim = CPU(core, code).simulate()
+            results.append(f"{sim:.2f} simulated {metric}")
+        if args.mode != "simulate":
+            meas = compile_run(code, core)
+            results.append(f"{meas:.2f} measured {metric}")
+        print(f"{name:>20}: {', '.join(results)}")
 
 if __name__ == "__main__":
     main()
