@@ -428,6 +428,12 @@ def madd(code, x0, y0, x1, y1, *, ts=ts, ts2=fts):
 def fpan333(code, a, b, c, d, e, f, *, ts=ts, cts=ts, fts=fts, add=add):
     return fpan.interpret(fpan.FPAN333)(code, a, b, c, d, e, f, ts=ts, cts=cts, fts=fts, add=add)
 
+@algorithm(ts=ts, cts=ts, fts=fts, add=add)
+def fpan444(code, a, b, c, d, e, f, g, h, *, ts=ts, cts=ts, fts=fts, add=add):
+    return fpan.interpret(fpan.criticalize(fpan.FPAN444_3))(
+        code, a, b, c, d, e, f, g, h,
+        ts=ts, cts=cts, fts=fts, add=add)
+
 VERBOSE = False
 
 class CPU:
