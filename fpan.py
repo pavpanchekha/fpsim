@@ -20,6 +20,57 @@ def interpret(fpan):
                 args[b] = None
         return [x for x in args if x is not None]
     return impl
+
+
+def critical_gates(fpan):
+    """Return the list of gate indices on the critical path of *fpan*.
+
+    Each entry of *fpan* is a tuple ``(a, b, op)``.  Gates take two inputs and
+    overwrite those same indices with two outputs.  The latency from either
+    input to the ``a`` output is 3 cycles; the latency to the ``b`` output is
+    15 cycles.  The critical path is the dependency chain with the largest
+    total latency.  Gate indices are returned 0-based.
+    """
+
+    if not fpan:
+        return []
+
+    n_regs = max(max(a, b) for a, b, _ in fpan)
+
+    reg_time = [0] * (n_regs + 1)
+    reg_src = [None] * (n_regs + 1)
+
+    gate_info = []
+
+    for i, (ra, rb, _) in enumerate(fpan):
+        ia_time = reg_time[ra]
+        ib_time = reg_time[rb]
+        ia_src = reg_src[ra]
+        ib_src = reg_src[rb]
+        start = max(ia_time, ib_time)
+        gate_info.append((ia_src, ia_time, ib_src, ib_time, start))
+        reg_time[ra] = start + 3
+        reg_src[ra] = i
+        reg_time[rb] = start + 15
+        reg_src[rb] = i
+
+    max_time = max(reg_time[1:])
+    worklist = [reg_src[r] for r in range(1, n_regs + 1)
+                if reg_time[r] == max_time and reg_src[r] is not None]
+
+    crit = set()
+    while worklist:
+        idx = worklist.pop()
+        if idx is None or idx in crit:
+            continue
+        crit.add(idx)
+        ia_src, ia_time, ib_src, ib_time, start = gate_info[idx]
+        if ia_time == start and ia_src is not None:
+            worklist.append(ia_src)
+        if ib_time == start and ib_src is not None:
+            worklist.append(ib_src)
+
+    return sorted(crit)
         
         
 
