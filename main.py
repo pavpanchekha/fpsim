@@ -424,7 +424,11 @@ def get_code(name):
 def main():
     import argparse
     # Set up argument parsing
-    parser = argparse.ArgumentParser(description="Simulate CPU performance for TwoSum variants.")
+    parser = argparse.ArgumentParser(
+        description="Simulate CPU performance for TwoSum variants.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="Available codes: {}".format(", ".join(sorted(CODES.keys())))
+    )
     parser.add_argument('--verbose', action='store_true', help='Enable verbose output')
     parser.add_argument('--core', type=str, default="P", choices=CORES.keys(), help='P-core or E-core')
     parser.add_argument('--instances', type=int, default=1, help='Number of instances')
