@@ -1,9 +1,9 @@
 
 FPAN333 = [
-    (1, 2, "cts"), (3, 4, "ts"), (5, 6, "cts"),
+    (1, 2, "ts"), (3, 4, "ts"), (5, 6, "ts"),
     (1, 3, "fts"), (2, 6, "add"), (4, 5, "ts"),
-    (1, 4, "fts"), (2, 3, "cts"), (3, 5, "add"),
-    (3, 4, "ts"), (2, 3, "cts"),
+    (1, 4, "fts"), (2, 3, "ts"), (3, 5, "add"),
+    (3, 4, "ts"), (2, 3, "ts"),
     (1, 2, "fts"), (3, 4, "add"),
     (2, 3, "fts")
 ]
@@ -85,8 +85,17 @@ def critical_gates(fpan):
         if ib_time == start and ib_src is not None:
             worklist.append(ib_src)
 
-    return sorted(crit)
+    return set(crit)
         
-        
-
-
+def criticalize(fpan):
+    crit = critical_gates(fpan)
+    out = []
+    for i, (a, b, t) in enumerate(fpan):
+        if t == "ts":
+            out.append((a, b, "cts" if i in crit else "ts"))
+        else:
+            out.append((a, b, t))
+    if out != fpan:
+        return criticalize(out)
+    else:
+        return out
