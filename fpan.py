@@ -23,13 +23,19 @@ def interpret(fpan):
 
 
 def critical_gates(fpan):
-    """Return the list of gate indices on the critical path of *fpan*.
+    """Return the list of gate indices on the critical path of ``fpan``.
 
-    Each entry of *fpan* is a tuple ``(a, b, op)``.  Gates take two inputs and
-    overwrite those same indices with two outputs.  The latency from either
-    input to the ``a`` output is 3 cycles; the latency to the ``b`` output is
-    15 cycles.  The critical path is the dependency chain with the largest
-    total latency.  Gate indices are returned 0-based.
+    Each entry of ``fpan`` is a tuple ``(a, b, op)``.  The gate takes two
+    inputs and writes two outputs back to registers ``a`` and ``b``.  The
+    latency to each output depends on ``op``:
+
+    ``ts``  -> ``(3, 15)``
+    ``fts`` -> ``(3, 9)``
+    ``add`` -> ``(3, 3)``
+    ``cts`` -> ``(3, 11)``
+
+    The critical path is the dependency chain with the largest total latency.
+    Gate indices are returned 0-based.
     """
 
     if not fpan:
@@ -42,16 +48,25 @@ def critical_gates(fpan):
 
     gate_info = []
 
-    for i, (ra, rb, _) in enumerate(fpan):
+    latencies = {
+        "ts": (3, 15),
+        "fts": (3, 9),
+        "add": (3, 3),
+        "cts": (3, 11),
+    }
+
+    for i, (ra, rb, op) in enumerate(fpan):
         ia_time = reg_time[ra]
         ib_time = reg_time[rb]
         ia_src = reg_src[ra]
         ib_src = reg_src[rb]
         start = max(ia_time, ib_time)
         gate_info.append((ia_src, ia_time, ib_src, ib_time, start))
-        reg_time[ra] = start + 3
+
+        a_lat, b_lat = latencies[op]
+        reg_time[ra] = start + a_lat
         reg_src[ra] = i
-        reg_time[rb] = start + 15
+        reg_time[rb] = start + b_lat
         reg_src[rb] = i
 
     max_time = max(reg_time[1:])
