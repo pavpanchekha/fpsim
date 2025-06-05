@@ -50,23 +50,24 @@ class Assembler:
         self.flags: set[int] = set()
         self.curflags: typing.Optional[int] = None
 
-    def push_instruction(self, name, args):
+    def push_instruction(self, name, args, uop=False):
         out = self.ip
         self.ip += 1
-        signature = self.isa.instructions[name].args
-        assert "out" in signature[0].split()
-        assert len(args) == len(signature[1:]), f"{name} wrong number of arguments"
-        if "flags" in signature[0].split():
-            self.flags.add(out)
-            self.curflags = out
-        for arg, sig in zip(args, signature[1:]):
-            if "flags" in sig.split():
-                assert arg in self.flags, f"{name} argument not a flags register"
-                assert arg == self.curflags, f"{name} argument is not current flags"
-            elif "const" in sig.split():
-                assert isinstance(arg, str), f"{name} argument not a constant"
-            elif "in" in sig.split():
-                assert isinstance(arg, int), f"{name} argument not a register"
+        if not uop:
+            signature = self.isa.instructions[name].args
+            assert "out" in signature[0].split()
+            assert len(args) == len(signature[1:]), f"{name} wrong number of arguments"
+            if "flags" in signature[0].split():
+                self.flags.add(out)
+                self.curflags = out
+            for arg, sig in zip(args, signature[1:]):
+                if "flags" in sig.split():
+                    assert arg in self.flags, f"{name} argument not a flags register"
+                    assert arg == self.curflags, f"{name} argument is not current flags"
+                elif "const" in sig.split():
+                    assert isinstance(arg, str), f"{name} argument not a constant"
+                elif "in" in sig.split():
+                    assert isinstance(arg, int), f"{name} argument not a register"
         self.code.append([out, name, args])
         return out
 
@@ -75,4 +76,4 @@ class Assembler:
         return self
 
     def __getattr__(self, name):
-        return lambda *args: self.push_instruction(name, args)
+        return lambda *args, uop=False: self.push_instruction(name, args, uop=uop)
