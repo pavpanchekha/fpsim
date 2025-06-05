@@ -9,6 +9,7 @@ import subprocess
 import sys
 import time
 import fpan
+import math
 
 @dataclass
 class Sig:
@@ -142,9 +143,9 @@ def num_args(fn):
 ASM_ITERATIONS = 100_000_000
 
 class Listing:
-    def __init__(self, f, kwargs):
+    def __init__(self, f, kwargs, argnum=None):
         self.f = f
-        self.argnum = num_args(f) - 1
+        self.argnum = argnum if argnum is not None else num_args(f) - 1
         self.kwargs = kwargs
 
     def __call__(self, code, *args):
@@ -153,18 +154,24 @@ class Listing:
     def set_kwargs(self, kwargs):
         return Listing(self.f, kwargs)
 
-    def to_asm(self, isa: ISA, name, fd, instances=1):
+    def replicate(self, instances=1):
+        def f(code, *iargs, **kwargs):
+            assert len(iargs) == instances * self.argnum, "Wrong number of arguments to replicated inputs"
+            oargs = []
+            for instance in range(instances):
+                this_iargs = iargs[instance*self.argnum : (instance+1)*self.argnum]
+                this_oargs = self.f(code, *this_iargs, **self.kwargs)
+                oargs.append(max(*this_oargs))
+            return tuple(oargs)
+        return Listing(f, self.kwargs, argnum=self.argnum*instances)
+
+    def to_asm(self, isa: ISA, name, fd):
         l = Assembler(isa)
-        iargs = []
-        oargs = []
-        latency_ties = []
-        for instance in range(instances):
-            this_iargs = list(range(-self.argnum - len(iargs), -len(iargs)))
-            this_oargs = self.f(l, *this_iargs, **self.kwargs)
-            iargs.extend(this_iargs)
-            oargs.extend(this_oargs)
-            # We tie all inputs to the last output register
-            latency_ties.extend([(iarg, max(*this_oargs)) for iarg in this_iargs])
+        iargs = range(-self.argnum, 0)
+        oargs = self.f(l, *iargs, **self.kwargs)
+
+        copies = int(math.ceil(len(iargs) / max(1, len(oargs))))
+        latency_ties = list(zip(iargs, [oarg for oarg in oargs for i in range(copies)]))
 
         regs = set()
         regstart = {}
@@ -424,10 +431,11 @@ def fpan333(code, a, b, c, d, e, f, *, ts=ts, cts=ts, fts=fts, add=add):
 VERBOSE = False
 
 class CPU:
-    def __init__(self, core: Core, code, instances):
+    def __init__(self, core: Core, code):
         self.core = core
-        self.code = Assembler(core.isa).exec(code, *range(-code.argnum, 0)).code
-        self.instances = instances
+        l = Assembler(core.isa)
+        self.oargs = code(l, *range(-code.argnum, 0))
+        self.code = l.code
 
         self.last = max(pc for pc, opcode, deps in self.code)
         self.status = {}
@@ -435,34 +443,31 @@ class CPU:
         self.cycle = 0
         self.completions = 0
 
-    def dispatch(self, instance, instruction, units):
+    def dispatch(self, instruction, units):
         pc, opcode, deps = instruction
         latency, ports = self.core.latencies[opcode]
-        if (instance, pc) in self.status:
+        if pc in self.status:
             return None
-        if not all(self.status.get((instance, dep)) == 0 for dep in deps if isinstance(dep, int) and dep >= 0):
+        if not all(self.status.get(dep) == 0 for dep in deps if isinstance(dep, int) and dep >= 0):
             return None
         for unit in self.core.priority:
             if unit not in units and unit in ports:
-                if VERBOSE: print(f"[{self.cycle:>5}] {instance}%{pc} ({opcode}) start on u{unit}")
-                self.status[(instance, pc)] = latency
+                if VERBOSE: print(f"[{self.cycle:>5}] {pc} ({opcode}) start on u{unit}")
+                self.status[pc] = latency
                 units[unit] = True
                 return
 
     def tick(self):
         units = {}
-        for instance in range(self.instances):
-            for instruction in reversed(self.code):
-                self.dispatch(instance, instruction, units)
-        for (instance, pc), latency in self.status.items():
+        for instruction in self.code:
+            self.dispatch(instruction, units)
+        for pc, latency in self.status.items():
             if latency == 0: continue
-            self.status[(instance, pc)] = latency - 1
-        for instance in range(self.instances):
-            if self.status.get((instance, self.last)) == 0:
-                if VERBOSE: print(f"Instance {instance} completed on cycle {self.cycle}")
-                self.completions += 1
-                for instruction in self.code:
-                    del self.status[(instance, instruction[0])]
+            self.status[pc] = latency - 1
+        if all(self.status.get(oarg) == 0 for oarg in self.oargs):
+            if VERBOSE: print(f"Instance completed on cycle {self.cycle}")
+            self.completions += 1
+            self.status = {}
         self.cycle += 1
 
     def simulate(self, cycles=10000):
@@ -522,7 +527,7 @@ int main(void) {
 }
 """
 
-def compile_run(code, core, instances=1):
+def compile_run(code, core):
     with tempfile.TemporaryDirectory() as tmpdir:
         asm_file = str(Path(tmpdir) / "routine.s")
         c_file = str(Path(tmpdir) / "routine.c")
@@ -540,7 +545,7 @@ def compile_run(code, core, instances=1):
                 print(file=f)
 
             Listing(lambda code: (), {}).to_asm(core.isa, "null_loop", f)
-            code.to_asm(core.isa, "bench_loop", f, instances=instances)
+            code.to_asm(core.isa, "bench_loop", f)
         with open(c_file, "w") as f:
             f.write(DRIVER)
         if VERBOSE: print(open(asm_file).read())
@@ -550,7 +555,7 @@ def compile_run(code, core, instances=1):
         res = subprocess.run([exe_file], stdout=subprocess.PIPE)
     out = res.stdout.decode("ascii").strip().split()
     assert len(out) == 3 and out[1] == "cycles" and out[2] == "elapsed"
-    return float(out[0]) / ASM_ITERATIONS / instances
+    return float(out[0]) / ASM_ITERATIONS
 
 def get_code(name):
     if "[" in name:
@@ -589,9 +594,9 @@ def main():
     # Simulate and print results for each core code
     for name in codes:
         core = CORES[args.core]
-        code = get_code(name)
-        measured = compile_run(code, core, args.instances)
-        simulated = CPU(core, code, args.instances).simulate()
+        code = get_code(name).replicate(num_instances)
+        measured = compile_run(code, core)
+        simulated = CPU(core, code).simulate()
         metric = "throughput" if num_instances > 1 else "latency"
         print(f"{name:>20}: {simulated:.2f} simulated {metric}, {measured:.2f} measured {metric}")
 
