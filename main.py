@@ -1,5 +1,4 @@
 import typing
-from dataclasses import dataclass
 from functools import wraps
 import inspect
 import pulp
@@ -10,127 +9,13 @@ import sys
 import time
 import fpan
 import math
+import assembler
 
-@dataclass
-class Sig:
-    args : list[str]
-    suffix : typing.Union[None, str]
-    
-    def __init__(self, *args, suffix=None):
-        self.args = args
-        self.suffix = suffix
-
-@dataclass
-class ISA:
-    registers : int
-    prefix : str
-    instructions: dict[str, list[str]]
-
-ARM = ISA(
-    registers = 32,
-    prefix = "d",
-    instructions = {
-        "fadd": Sig("out", "in", "in"),
-        "fsub": Sig("out", "in", "in"),
-        "fabs": Sig("out", "in"),
-        "fcmp": Sig("out flags", "in", "in"),
-        "fcsel": Sig("out", "in flags", "in", "in", suffix="lt")
-    }
-)
-
-X86 = ISA(
-    registers = 16,
-    prefix = "xmm",
-    instructions = {
-        "vaddsd": Sig("out", "in", "in"),
-        "vsubsd": Sig("out", "in", "in"),
-        "vandpd": Sig("out", "in", "const"),
-        "vcmpltsd": Sig("out", "in", "in"),
-        "vpcmpgtq": Sig("out", "in", "in"),
-        "vblendvpd": Sig("out", "in", "in", "in"),
-    },
-)
-
-@dataclass
-class Core:
-    isa : ISA
-    latencies : dict[str, tuple[int, list[int]]]
-    priority : list[int]
-
-# Apple M1
-PCORE = Core(ARM, {
-    "fadd": (3, [11, 12, 13, 14]),
-    "fsub": (3, [11, 12, 13, 14]),
-    "fabs": (2, [11, 12, 13, 14]),
-    "fcmp": (2, [11]),
-    "fcsel": (2, [13, 14]),
-}, priority=[12, 13, 14, 11])
-
-ECORE = Core(ARM, {
-    "fadd": (3, [6, 7]),
-    "fsub": (3, [6, 7]),
-    "fabs": (2, [6, 7]),
-    "fcmp": (2, [6]),
-    "fcsel": (2, [6, 7]),
-}, priority = [7, 6])
-
-# Coffee Lake
-CL_CORE = Core(X86, {
-    "vaddsd": (4, [0, 1]),
-    "vsubsd": (4, [0, 1]),
-    "vandpd": (1, [0, 1, 5]),
-    "vcmpltsd": (4, [0, 1]),
-    "vpcmpgtq": (3, [5]),
-    "vblendvpd": (2, [0, 1, 5]),
-}, priority=[0, 1, 5])
-
-CORES = {
-    "E": ECORE,
-    "P": PCORE,
-    "CL": CL_CORE,
-}
+from assembler import ARM, X86, ISA, Sig, Assembler
+from cores import Core, CPU, CORES
 
 CODES = {}
 
-@dataclass
-class Assembler:
-    isa: ISA
-    ip: int
-    code: list[tuple[int, str, list[int]]]
-
-    def __init__(self, isa: ISA):
-        self.isa = isa
-        self.ip = 0
-        self.code = []
-        self.flags = set()
-        self.curflags = None
-
-    def push_instruction(self, name, args):
-        out = self.ip
-        self.ip += 1
-        signature = self.isa.instructions[name].args
-        assert "out" in signature[0].split()
-        assert len(args) == len(signature[1:]), f"{name} wrong number of arguments"
-        if "flags" in signature[0].split():
-            self.flags.add(out)
-            self.curflags = out
-        for arg, sig in zip(args, signature[1:]):
-            if "flags" in sig.split():
-                assert arg in self.flags, f"{name} argument not a flags register"
-                assert arg == self.curflags, f"{name} argument is not current flags"
-            elif "const" in sig.split():
-                assert isinstance(arg, str), f"{name} argument not a constant"
-            elif "in" in sig.split():
-                assert isinstance(arg, int), f"{name} argument not a register"
-        self.code.append([out, name, args])
-        return out
-    
-    def exec(self, f, *args, **kwargs):
-        f(self, *args, **kwargs)
-        return self
-
-    def __getattr__(self, name):
-        return lambda *args: self.push_instruction(name, args)
 
 # Written by ChatGPT 4o
 def num_args(fn):
@@ -166,7 +51,7 @@ class Listing:
         return Listing(f, self.kwargs, argnum=self.argnum*instances)
 
     def to_asm(self, isa: ISA, name, fd):
-        l = Assembler(isa)
+        l = assembler.Assembler(isa)
         iargs = range(-self.argnum, 0)
         oargs = self.f(l, *iargs, **self.kwargs)
 
@@ -436,51 +321,6 @@ def fpan444(code, a, b, c, d, e, f, g, h, *, ts=ts, cts=ts, fts=fts, add=add):
 
 VERBOSE = False
 
-class CPU:
-    def __init__(self, core: Core, code):
-        self.core = core
-        l = Assembler(core.isa)
-        self.oargs = code(l, *range(-code.argnum, 0))
-        self.code = l.code
-
-        self.last = max(pc for pc, opcode, deps in self.code)
-        self.status = {}
-
-        self.cycle = 0
-        self.completions = 0
-
-    def dispatch(self, instruction, units):
-        pc, opcode, deps = instruction
-        latency, ports = self.core.latencies[opcode]
-        if pc in self.status:
-            return None
-        if not all(self.status.get(dep) == 0 for dep in deps if isinstance(dep, int) and dep >= 0):
-            return None
-        for unit in self.core.priority:
-            if unit not in units and unit in ports:
-                if VERBOSE: print(f"[{self.cycle:>5}] {pc} ({opcode}) start on u{unit}")
-                self.status[pc] = latency
-                units[unit] = True
-                return
-
-    def tick(self):
-        units = {}
-        for instruction in self.code:
-            self.dispatch(instruction, units)
-        for pc, latency in self.status.items():
-            if latency == 0: continue
-            self.status[pc] = latency - 1
-        if all(self.status.get(oarg) == 0 for oarg in self.oargs):
-            if VERBOSE: print(f"Instance completed on cycle {self.cycle}")
-            self.completions += 1
-            self.status = {}
-        self.cycle += 1
-
-    def simulate(self, cycles=10000):
-        for i in range(cycles):
-            self.tick()
-        return self.cycle / self.completions
-
 # Written by ChatGPT o4-mini
 DRIVER = r"""
 #include <stdio.h>
@@ -606,7 +446,7 @@ def main():
         metric = "throughput" if num_instances > 1 else "latency"
         results = []
         if args.mode != "measure":
-            sim = CPU(core, code).simulate()
+            sim = CPU(core, code, verbose=args.verbose).simulate()
             results.append(f"{sim:.2f} simulated {metric}")
         if args.mode != "simulate":
             meas = compile_run(code, core)
