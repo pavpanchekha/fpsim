@@ -68,9 +68,9 @@ class Listing:
             regstart[arg] = -1 # before start
             regs.add(arg)
         for out, op, args in l.code:
-            if out in iargs: continue
-            regstart[out] = out
-            regend[out] = out
+            if out not in iargs:
+                regstart[out] = out
+                regend[out] = out
             regs.add(out)
             for arg in args:
                 if isinstance(arg, str): continue
@@ -137,6 +137,8 @@ class Listing:
 
         PREFIX = isa.prefix
         for out, op, args in l.code:
+            # Apple M1 hiccups if you fmov a register to itself, don't do it
+            if op == isa.mov and assignment[out] == assignment[args[0]]: continue
             signature = isa.instructions[op]
             arglist = []
             for arg, sig in zip([out] + list(args), signature.args):
@@ -437,14 +439,13 @@ def main():
     for name in codes:
         core = CORES[args.core]
         code = get_code(name).replicate(num_instances)
-        metric = "throughput" if num_instances > 1 else "latency"
         results = []
         if args.mode != "measure":
             sim = CPU(core, code, verbose=args.verbose).simulate()
-            results.append(f"{sim:.2f} simulated {metric}")
+            results.append(f"{sim:.2f} simulated latency")
         if args.mode != "simulate":
             meas = compile_run(code, core)
-            results.append(f"{meas:.2f} measured {metric}")
+            results.append(f"{meas:.2f} measured latency")
         print(f"{name:>20}: {', '.join(results)}")
 
 if __name__ == "__main__":
