@@ -54,7 +54,7 @@ CORES = {
 @dataclass
 class Schedule:
     busy : bool = False
-    capacity : int = 36
+    capacity : int = 32
     waiting: list[tuple[int, str, list[int]]] = field(default_factory=list)
 
 class CPU:
@@ -122,7 +122,7 @@ class CPU:
             self.advance_pc()
 
     def dispatch(self):
-        for _ in range(4):
+        while True:
             if not self.decode_queue:
                 break  # done
             out, op, args = self.decode_queue[0]
