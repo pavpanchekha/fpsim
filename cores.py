@@ -113,31 +113,40 @@ class CPU:
         for pc in done:
             del self.inflight[pc]
 
-    def tick(self):
-        self.retire()
-        for i in range(8):
-            if len(self.decode_queue) >= 12: break # backpressure
+    def frontend(self):
+        for _ in range(8):
+            if len(self.decode_queue) >= 12:
+                break  # backpressure
             inst = self.code[self.pc]
             self.decode_queue.extend(self.decode(inst))
             self.advance_pc()
-        for i in range(4):
-            if not self.decode_queue: break # done
+
+    def dispatch(self):
+        for _ in range(4):
+            if not self.decode_queue:
+                break  # done
             out, op, args = self.decode_queue[0]
             unit_options = []
             for port in self.core.priority:
-                if port not in self.core.latencies[op][1]: continue
+                if port not in self.core.latencies[op][1]:
+                    continue
                 unit = self.units[port]
-                if unit.busy: continue
-                if len(unit.waiting) >= unit.capacity: continue
+                if unit.busy:
+                    continue
+                if len(unit.waiting) >= unit.capacity:
+                    continue
                 unit_options.append((port, unit, len(unit.waiting)))
             if not unit_options:
-                break # Backpressure
+                break  # Backpressure
             # Select the least-busy unit; tie-breaks to highest priority
             port, unit, _ = min(unit_options, key=lambda x: x[2])
-            if self.verbose: print(f"[{self.cycle:>5}] Steering {op} to unit {port}")
+            if self.verbose:
+                print(f"[{self.cycle:>5}] Steering {op} to unit {port}")
             unit.busy = True
             unit.waiting.append((out, op, args))
             self.decode_queue.pop(0)
+
+    def schedule(self):
         for port, unit in self.units.items():
             for out, op, args in unit.waiting:
                 latency, ports = self.core.latencies[op]
@@ -146,8 +155,14 @@ class CPU:
                         print(f"[{self.cycle:>5}] {op} start on u{port}")
                     self.inflight[out] = latency
                     unit.waiting.remove((out, op, args))
-                    break # This port found its task for this cycle
-            unit.busy = False # Reset for next cycle
+                    break  # This port found its task for this cycle
+            unit.busy = False  # Reset for next cycle
+
+    def tick(self):
+        self.retire()
+        self.frontend()
+        self.dispatch()
+        self.schedule()
         self.cycle += 1
 
     def simulate(self, cycles=10000):
