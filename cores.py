@@ -88,7 +88,7 @@ class CPU:
             if op in self.core.microcode:
                 self.rat[out] = self.core.microcode[op](self.uops, *args)
             else:
-                self.rat[out] = self.uops.push_instruction(op, args)
+                self.rat[out] = self.uops.push_instruction(op, args, uop=True)
         uops = self.uops.code
         self.uops.code = []
         if self.verbose: print(f"[{self.cycle:>5}] decode {inst} ->", uops)
@@ -126,7 +126,7 @@ class CPU:
             if not self.decode_queue:
                 break  # done
             out, op, args = self.decode_queue[0]
-            unit_options = []
+            bestport, bestunit, bestscore = None, None, None
             for port in self.core.priority:
                 if port not in self.core.latencies[op][1]:
                     continue
@@ -135,15 +135,17 @@ class CPU:
                     continue
                 if len(unit.waiting) >= unit.capacity:
                     continue
-                unit_options.append((port, unit, len(unit.waiting)))
-            if not unit_options:
+                if not bestscore or len(unit.waiting) < bestscore:
+                    bestport = port
+                    bestunit = unit
+                    bestscore = len(unit.waiting)
+            if not bestunit:
                 break  # Backpressure
             # Select the least-busy unit; tie-breaks to highest priority
-            port, unit, _ = min(unit_options, key=lambda x: x[2])
             if self.verbose:
-                print(f"[{self.cycle:>5}] Steering {op} to unit {port}")
-            unit.busy = True
-            unit.waiting.append((out, op, args))
+                print(f"[{self.cycle:>5}] Steering {op} to unit {bestport}")
+            bestunit.busy = True
+            bestunit.waiting.append((out, op, args))
             self.decode_queue.pop(0)
 
     def schedule(self):
