@@ -43,20 +43,23 @@ class Listing:
         def f(code, *iargs, **kwargs):
             assert len(iargs) == instances * self.argnum, "Wrong number of arguments to replicated inputs"
             oargs = []
+            iargs = list(range(-instances*self.argnum, 0))
             for instance in range(instances):
                 this_iargs = iargs[instance*self.argnum : (instance+1)*self.argnum]
                 this_oargs = self.f(code, *this_iargs, **self.kwargs)
                 oargs.append(max(*this_oargs))
+            copies = int(math.ceil(len(iargs) / max(1, len(oargs))))
+            latency_ties = list(zip(iargs, [oarg for oarg in oargs for i in range(copies)]))
+            for iarg, oarg in latency_ties:
+                code.ip += 1
+                code.code.append((iarg, code.isa.mov, [oarg]))
             return tuple(oargs)
         return Listing(f, self.kwargs, argnum=self.argnum*instances)
 
     def to_asm(self, isa: ISA, name, fd):
         l = assembler.Assembler(isa)
         iargs = range(-self.argnum, 0)
-        oargs = self.f(l, *iargs, **self.kwargs)
-
-        copies = int(math.ceil(len(iargs) / max(1, len(oargs))))
-        latency_ties = list(zip(iargs, [oarg for oarg in oargs for i in range(copies)]))
+        self.f(l, *iargs)
 
         regs = set()
         regstart = {}
@@ -65,15 +68,13 @@ class Listing:
             regstart[arg] = -1 # before start
             regs.add(arg)
         for out, op, args in l.code:
-            regstart[out] = out
-            regend[out] = out
+            if out not in iargs:
+                regstart[out] = out
+                regend[out] = out
             regs.add(out)
             for arg in args:
                 if isinstance(arg, str): continue
                 regend[arg] = out
-        for arg in oargs:
-            regend[arg] = l.ip # past end
-            regs.add(arg)
 
         if VERBOSE: print("Performing register allocation with PuLP")
         start = time.time()
@@ -136,6 +137,8 @@ class Listing:
 
         PREFIX = isa.prefix
         for out, op, args in l.code:
+            # Apple M1 hiccups if you fmov a register to itself, don't do it
+            if op == isa.mov and assignment[out] == assignment[args[0]]: continue
             signature = isa.instructions[op]
             arglist = []
             for arg, sig in zip([out] + list(args), signature.args):
@@ -148,17 +151,6 @@ class Listing:
             if signature.suffix:
                 arglist.append(signature.suffix)
             print(f"  {op} {', '.join(arglist)}", file=fd)
-
-        # At the tail we need to move output registers back into input
-        # registers to enforce loop-carried dependency.
-        if isa == ARM:
-            for dst, src in latency_ties:
-                if assignment[dst] == assignment[src]: continue
-                print(f"  fmov d{assignment[dst]}, d{assignment[src]}", file=fd)
-        elif isa == X86:
-            for dst, src in latency_ties:
-                if assignment[dst] == assignment[src]: continue
-                print(f"  movsd xmm{assignment[dst]}, xmm{assignment[src]}", file=fd)
 
         if isa == ARM:
             print("  subs x9, x9, #1", file=fd)
@@ -447,14 +439,13 @@ def main():
     for name in codes:
         core = CORES[args.core]
         code = get_code(name).replicate(num_instances)
-        metric = "throughput" if num_instances > 1 else "latency"
         results = []
         if args.mode != "measure":
             sim = CPU(core, code, verbose=args.verbose).simulate()
-            results.append(f"{sim:.2f} simulated {metric}")
+            results.append(f"{sim:.2f} simulated latency")
         if args.mode != "simulate":
             meas = compile_run(code, core)
-            results.append(f"{meas:.2f} measured {metric}")
+            results.append(f"{meas:.2f} measured latency")
         print(f"{name:>20}: {', '.join(results)}")
 
 if __name__ == "__main__":
