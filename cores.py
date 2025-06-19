@@ -150,7 +150,10 @@ class CPU:
         for port, unit in self.units.items():
             for out, op, args in unit.waiting:
                 latency, ports = self.core.latencies[op]
-                if all(arg in self.done for arg in args if isinstance(arg, int)):
+                for arg in args:
+                    if arg not in self.done and isinstance(arg, int):
+                        break
+                else:
                     if self.verbose:
                         print(f"[{self.cycle:>5}] {op} start on u{port}")
                     self.inflight[out] = latency
