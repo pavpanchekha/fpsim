@@ -398,10 +398,10 @@ def compile_run(code, core, ssh_host=None):
                 "ssh", ssh_host, "mktemp", "-d"
             ]).decode().strip()
             subprocess.run([
-                "scp", asm_file, f"{ssh_host}:{remote_tmp}/routine.s"
+                "scp", "-q", asm_file, f"{ssh_host}:{remote_tmp}/routine.s"
             ])
             subprocess.run([
-                "scp", c_file, f"{ssh_host}:{remote_tmp}/routine.c"
+                "scp", "-q", c_file, f"{ssh_host}:{remote_tmp}/routine.c"
             ])
             subprocess.run([
                 "ssh", ssh_host,
