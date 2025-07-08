@@ -18,6 +18,8 @@ PCORE = Core(ARM, {
     "fabs": (2, [11, 12, 13, 14]),
     "fcmp": (2, [11]),
     "fcsel": (2, [13, 14]),
+    "fcmge": (2, [11, 12, 13, 14]),
+    "bsl": (2, [11, 12, 13, 14]),
 }, priority=[12, 13, 14, 11])
 
 ECORE = Core(ARM, {
@@ -26,6 +28,8 @@ ECORE = Core(ARM, {
     "fabs": (2, [6, 7]),
     "fcmp": (2, [6]),
     "fcsel": (2, [6, 7]),
+    "fcmge": (2, [6, 7]),
+    "bsl": (2, [6, 7]),
 }, priority=[7, 6])
 
 # Coffee Lake
