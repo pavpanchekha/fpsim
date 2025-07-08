@@ -10,6 +10,7 @@ import time
 import fpan
 import math
 import assembler
+import pprint
 
 from assembler import ARM, X86, ISA, Sig, Assembler
 from cores import Core, CPU, CORES
@@ -74,7 +75,7 @@ class Listing:
             regs.add(out)
             for arg in args:
                 if isinstance(arg, str): continue
-                regend[arg] = out
+                regend[arg] = max(regend.get(arg, out), out)
 
         if VERBOSE: print("Performing register allocation with PuLP")
         start = time.time()
