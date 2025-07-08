@@ -74,7 +74,6 @@ def fts(code, a, b):
         s = code.vaddsd(a, b)
         return s, code.vsubsd(b, code.vsubsd(s, a))
 
-
 @algorithm
 def ts(code, a, b):
     if code.isa == ARM:

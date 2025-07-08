@@ -22,7 +22,8 @@ ARM = ISA(
     registers=32,
     prefix={
         None: "d{}",
-        "vector": "v{}.2d",
+        "v2d": "v{}.2d",
+        "v8b": "v{}.8b",
         "flags": None,
     },
     instructions={
@@ -32,8 +33,8 @@ ARM = ISA(
         "fcmp": Sig("out flags", "in", "in"),
         "fcsel": Sig("out", "in flags", "in", "in", suffix="lt"),
         "fmov": Sig("out", "in"),
-        "fcmge": Sig("out vector", "in vector", "in vector"),
-        "bsl": Sig("in out vector", "in vector", "in vector"),
+        "fcmge": Sig("out v2d", "in v2d", "in v2d"),
+        "bsl": Sig("in out v8b", "in v8b", "in v8b"),
     },
     mov="fmov",
 )
