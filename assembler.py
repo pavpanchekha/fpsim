@@ -16,6 +16,7 @@ class ISA:
     registers: int
     prefix: str
     instructions: dict[str, Sig]
+    mov: str
 
 ARM = ISA(
     registers=32,
@@ -26,13 +27,16 @@ ARM = ISA(
         "fabs": Sig("out", "in"),
         "fcmp": Sig("out flags", "in", "in"),
         "fcsel": Sig("out", "in flags", "in", "in", suffix="lt"),
+        "fmov": Sig("out", "in")
     },
+    mov="fmov",
 )
 
 X86 = ISA(
     registers=16,
     prefix="xmm",
     instructions={
+        "movsd": Sig("out", "in"),
         "vaddsd": Sig("out", "in", "in"),
         "vsubsd": Sig("out", "in", "in"),
         "vandpd": Sig("out", "in", "const"),
@@ -40,6 +44,7 @@ X86 = ISA(
         "vpcmpgtq": Sig("out", "in", "in"),
         "vblendvpd": Sig("out", "in", "in", "in"),
     },
+    mov="movsd",
 )
 
 class Assembler:

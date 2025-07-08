@@ -51,66 +51,128 @@ CORES = {
     "CL": CL_CORE,
 }
 
+@dataclass
+class Schedule:
+    busy : bool = False
+    capacity : int = 32
+    waiting: list[tuple[int, str, list[int]]] = field(default_factory=list)
+
 class CPU:
     def __init__(self, core: Core, code, *, verbose: bool = False):
         self.core = core
         self.verbose = verbose
-        l = Assembler(core.isa)
-        self.iargs = list(range(-code.argnum, 0))
-        self.oargs = code(l, *self.iargs)
-        self.code = self.decode(l.code)
 
-        self.last = max(pc for pc, opcode, deps in self.code)
-        self.status = {}
+        # Front-end
+        self.pc = 0
+        self.rat = { i: i for i in range(-code.argnum, 0) }
+        self.code = Assembler(core.isa).exec(code, *range(-code.argnum, 0)).code
 
+        # Back-end
+        self.uops = Assembler(self.core.isa)
+        self.decode_queue = []
+        self.units = {p: Schedule() for p in self.core.priority}
+        self.inflight = {}
+        self.done = set(self.rat) # Arguments start complete
+
+        # Perf counters
         self.cycle = 0
-        self.completions = 0
+        self.retired = 0
 
-    def decode(self, code):
-        l = Assembler(self.core.isa)
-        names = { i: i for i in self.iargs}
-        for i, op, args in code:
-            args = [names[a] if isinstance(a, int) else a for a in args]
+    def decode(self, inst):
+        out, op, args = inst
+        if op == self.core.isa.mov:
+            assert len(args) == 1, f"Weird {op} instruction with arguments {args}"
+            self.rat[out] = self.rat[args[0]]
+        else:
+            args = [self.rat[a] if isinstance(a, int) else a for a in args]
             if op in self.core.microcode:
-                names[i] = self.core.microcode[op](l, *args)
+                self.rat[out] = self.core.microcode[op](self.uops, *args)
             else:
-                names[i] = l.push_instruction(op, args)
-        self.iargs = [names[a] for a in self.iargs]
-        self.oargs = [names[a] for a in self.oargs]
-        return l.code
+                self.rat[out] = self.uops.push_instruction(op, args, uop=True)
+        uops = self.uops.code
+        self.uops.code = []
+        if self.verbose: print(f"[{self.cycle:>5}] decode {inst} ->", uops)
+        return uops
 
-    def dispatch(self, instruction, units):
-        pc, opcode, deps = instruction
-        latency, ports = self.core.latencies[opcode]
-        if pc in self.status:
-            return None
-        if not all(self.status.get(dep) == 0 for dep in deps if isinstance(dep, int) and dep >= 0):
-            return None
-        for unit in self.core.priority:
-            if unit not in units and unit in ports:
-                if self.verbose:
-                    print(f"[{self.cycle:>5}] {pc} ({opcode}) start on u{unit}")
-                self.status[pc] = latency
-                units[unit] = True
-                return
+    def advance_pc(self):
+        out, op, args = self.code[self.pc]
+        self.pc += 1
+        if self.pc >= len(self.code):
+            self.pc = 0 # Restart the loop
+
+    def retire(self):
+        done = []
+        for pc, latency in self.inflight.items():
+            if latency > 0:
+                self.inflight[pc] -= 1
+                if self.inflight[pc] == 0:
+                    if self.verbose: print(f"[{self.cycle:>5}] retired {pc}")
+                    self.retired += 1
+                    done.append(pc)
+                    self.done.add(pc)
+        for pc in done:
+            del self.inflight[pc]
+
+    def frontend(self):
+        for _ in range(8):
+            if len(self.decode_queue) >= 12:
+                break  # backpressure
+            inst = self.code[self.pc]
+            self.decode_queue.extend(self.decode(inst))
+            self.advance_pc()
+
+    def dispatch(self):
+        while True:
+            if not self.decode_queue:
+                break  # done
+            out, op, args = self.decode_queue[0]
+            bestport, bestunit, bestscore = None, None, None
+            for port in self.core.priority:
+                if port not in self.core.latencies[op][1]:
+                    continue
+                unit = self.units[port]
+                if unit.busy:
+                    continue
+                if len(unit.waiting) >= unit.capacity:
+                    continue
+                if not bestscore or len(unit.waiting) < bestscore:
+                    bestport = port
+                    bestunit = unit
+                    bestscore = len(unit.waiting)
+            if not bestunit:
+                break  # Backpressure
+            # Select the least-busy unit; tie-breaks to highest priority
+            if self.verbose:
+                print(f"[{self.cycle:>5}] Steering {op} to unit {bestport}")
+            bestunit.busy = True
+            bestunit.waiting.append((out, op, args))
+            self.decode_queue.pop(0)
+
+    def schedule(self):
+        for port, unit in self.units.items():
+            for out, op, args in unit.waiting:
+                latency, ports = self.core.latencies[op]
+                for arg in args:
+                    if arg not in self.done and isinstance(arg, int):
+                        break
+                else:
+                    if self.verbose:
+                        print(f"[{self.cycle:>5}] {op} start on u{port}")
+                    self.inflight[out] = latency
+                    unit.waiting.remove((out, op, args))
+                    break  # This port found its task for this cycle
+            unit.busy = False  # Reset for next cycle
 
     def tick(self):
-        units = {}
-        for instruction in self.code:
-            self.dispatch(instruction, units)
-        for pc, latency in self.status.items():
-            if latency == 0:
-                continue
-            self.status[pc] = latency - 1
-        if all(self.status.get(oarg) == 0 for oarg in self.oargs):
-            if self.verbose:
-                print(f"Instance completed on cycle {self.cycle}")
-            self.completions += 1
-            self.status = {}
+        self.retire()
+        self.frontend()
+        self.dispatch()
+        self.schedule()
         self.cycle += 1
 
     def simulate(self, cycles=10000):
         for _ in range(cycles):
             self.tick()
-        return self.cycle / self.completions
+        true_instructions = len([op for out, op, args in self.code if op != self.core.isa.mov])
+        return self.cycle / (self.retired / true_instructions)
 
