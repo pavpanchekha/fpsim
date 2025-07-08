@@ -186,9 +186,10 @@ class CPU:
         for key, events in sorted(self.metrics.items()):
             evt_types = set(events)
             print(f"{key:>10}:", end="")
-            for evt_type in evt_types:
+            for evt_type in sorted(evt_types):
                 pct = events.count(evt_type) / self.cycle if self.cycle else 0
-                print(f" {evt_type:>6} ({pct*100:.1f}%)", end="")
+                item = f"{evt_type} ({pct*100:.1f}%)"
+                print(f" {item:>16}", end="")
             print()
         true_instructions = len([op for out, op, args in self.code if op != self.core.isa.mov])
         return self.cycle / (self.retired / true_instructions)
