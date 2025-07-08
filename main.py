@@ -136,19 +136,26 @@ class Listing:
         print(".p2align 4", file=fd)
         print("1:", file=fd)
 
-        PREFIX = isa.prefix
         for out, op, args in l.code:
             # Apple M1 hiccups if you fmov a register to itself, don't do it
             if op == isa.mov and assignment[out] == assignment[args[0]]: continue
             signature = isa.instructions[op]
             arglist = []
             for arg, sig in zip([out] + list(args), signature.args):
-                if "flags" in sig.split():
+                flags = sig.split()
+                for fl in flags:
+                    if fl in isa.prefix:
+                        pfx = isa.prefix[fl]
+                        break
+                else:
+                    pfx = isa.prefix.get(None)
+                if pfx is None:
+                    # None means implicit register
                     continue
-                elif isinstance(arg, str):
+                if "const" in flags and isinstance(arg, str):
                     arglist.append(f"[rip+{arg}]")
                 else:
-                    arglist.append(isa.prefix + str(assignment[arg]))
+                    arglist.append(pfx.format(assignment[arg]))
             if signature.suffix:
                 arglist.append(signature.suffix)
             print(f"  {op} {', '.join(arglist)}", file=fd)

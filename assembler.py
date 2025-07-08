@@ -14,27 +14,36 @@ class Sig:
 @dataclass
 class ISA:
     registers: int
-    prefix: str
+    prefix: dict[typing.Optional[str], typing.Optional[str]]
     instructions: dict[str, Sig]
     mov: str
 
 ARM = ISA(
     registers=32,
-    prefix="d",
+    prefix={
+        None: "d{}",
+        "vector": "v{}.2d",
+        "flags": None,
+    },
     instructions={
         "fadd": Sig("out", "in", "in"),
         "fsub": Sig("out", "in", "in"),
         "fabs": Sig("out", "in"),
         "fcmp": Sig("out flags", "in", "in"),
         "fcsel": Sig("out", "in flags", "in", "in", suffix="lt"),
-        "fmov": Sig("out", "in")
+        "fmov": Sig("out", "in"),
+        "fcmge": Sig("out vector", "in vector", "in vector"),
+        "bsl": Sig("out vector", "in vector", "in vector", "in vector"),
     },
     mov="fmov",
 )
 
 X86 = ISA(
     registers=16,
-    prefix="xmm",
+    prefix={
+        None: "xmm{}",
+        "flags": None,
+    },
     instructions={
         "movsd": Sig("out", "in"),
         "vaddsd": Sig("out", "in", "in"),
@@ -71,7 +80,7 @@ class Assembler:
                     assert arg == self.curflags, f"{name} argument is not current flags"
                 elif "const" in sig.split():
                     assert isinstance(arg, str), f"{name} argument not a constant"
-                elif "in" in sig.split():
+                elif "in" in sig.split() or "vector" in sig.split():
                     assert isinstance(arg, int), f"{name} argument not a register"
         self.code.append([out, name, args])
         return out
