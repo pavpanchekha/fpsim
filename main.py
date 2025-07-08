@@ -398,19 +398,17 @@ def compile_run(code, core):
 
 def get_code(name):
     if "[" in name:
-        name, rest = name.split("[")
-        assert rest.endswith("]")
-        rest = rest.removesuffix("]")
-        args = rest.split(",")
+        prefix, rest = name.split("[", 1)
+        args, suffix = rest.split("]", 1)
         kwargs = {}
-        for arg in args:
+        for arg in args.split(","):
             key, value = arg.split("=")
             if value.isdigit():
                 value = int(value)
             else:
                 value = get_code(value)
             kwargs[key] = value
-        return get_code(name).set_kwargs(kwargs)
+        return get_code(prefix + suffix).set_kwargs(kwargs)
     else:
         return CODES[name]
 
