@@ -366,7 +366,7 @@ int main(void) {
 }
 """
 
-def compile_run(code, core):
+def compile_run(code, core, ssh_host=None):
     with tempfile.TemporaryDirectory() as tmpdir:
         asm_file = str(Path(tmpdir) / "routine.s")
         c_file = str(Path(tmpdir) / "routine.c")
@@ -387,11 +387,34 @@ def compile_run(code, core):
             code.to_asm(core.isa, "bench_loop", f)
         with open(c_file, "w") as f:
             f.write(DRIVER)
-        if VERBOSE: print(open(asm_file).read())
-        subprocess.run(["clang", "-c", asm_file, "-o", o_file])
-        #if VERBOSE: subprocess.run(["objdump", "-d", o_file])
-        subprocess.run(["clang", c_file, o_file, "-o", exe_file])
-        res = subprocess.run([exe_file], stdout=subprocess.PIPE)
+        if VERBOSE:
+            print(open(asm_file).read())
+        if ssh_host is None:
+            subprocess.run(["clang", "-c", asm_file, "-o", o_file])
+            subprocess.run(["clang", c_file, o_file, "-o", exe_file])
+            res = subprocess.run([exe_file], stdout=subprocess.PIPE)
+        else:
+            remote_tmp = subprocess.check_output([
+                "ssh", ssh_host, "mktemp", "-d"
+            ]).decode().strip()
+            subprocess.run([
+                "scp", "-q", asm_file, f"{ssh_host}:{remote_tmp}/routine.s"
+            ])
+            subprocess.run([
+                "scp", "-q", c_file, f"{ssh_host}:{remote_tmp}/routine.c"
+            ])
+            subprocess.run([
+                "ssh", ssh_host,
+                f"clang -c {remote_tmp}/routine.s -o {remote_tmp}/routine.o"
+            ])
+            subprocess.run([
+                "ssh", ssh_host,
+                f"clang {remote_tmp}/routine.c {remote_tmp}/routine.o -o {remote_tmp}/routine"
+            ])
+            res = subprocess.run([
+                "ssh", ssh_host, f"{remote_tmp}/routine"
+            ], stdout=subprocess.PIPE)
+            subprocess.run(["ssh", ssh_host, "rm", "-rf", remote_tmp])
     out = res.stdout.decode("ascii").strip().split()
     assert len(out) == 3 and out[1] == "cycles" and out[2] == "elapsed"
     return float(out[0]) / ASM_ITERATIONS
@@ -425,6 +448,8 @@ def main():
     parser.add_argument('--instances', type=int, default=1, help='Number of instances')
     parser.add_argument('--mode', choices=['simulate', 'measure', 'both'], default='both',
                         help='Run simulation, measurement, or both')
+    parser.add_argument('--ssh', type=str, default=None,
+                        help='Compile and run on the specified SSH host')
     parser.add_argument('codes', nargs=argparse.REMAINDER, help='Functions to simulate')
     args = parser.parse_args()
 
@@ -443,7 +468,7 @@ def main():
             sim = CPU(core, code, verbose=args.verbose).simulate()
             results.append(f"{sim:.2f} simulated latency")
         if args.mode != "simulate":
-            meas = compile_run(code, core)
+            meas = compile_run(code, core, ssh_host=args.ssh)
             results.append(f"{meas:.2f} measured latency")
         print(f"{name:>20}: {', '.join(results)}")
 
