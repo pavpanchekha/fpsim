@@ -71,6 +71,7 @@ class CPU:
         self.uops = Assembler(self.core.isa)
         self.decode_queue = []
         self.units = {p: Schedule() for p in self.core.priority}
+        self.metrics = {}
         self.inflight = {}
         self.done = set(self.rat) # Arguments start complete
 
@@ -116,13 +117,14 @@ class CPU:
     def frontend(self):
         for _ in range(8):
             if len(self.decode_queue) >= 12:
+                self.metrics.setdefault("frontend", []).append("full")
                 break  # backpressure
             inst = self.code[self.pc]
             self.decode_queue.extend(self.decode(inst))
             self.advance_pc()
 
     def dispatch(self):
-        while True:
+        for _ in range(4):
             if not self.decode_queue:
                 break  # done
             out, op, args = self.decode_queue[0]
@@ -140,6 +142,7 @@ class CPU:
                     bestunit = unit
                     bestscore = len(unit.waiting)
             if not bestunit:
+                self.metrics.setdefault("frontend", []).append("stall")
                 break  # Backpressure
             # Select the least-busy unit; tie-breaks to highest priority
             if self.verbose:
@@ -150,6 +153,8 @@ class CPU:
 
     def schedule(self):
         for port, unit in self.units.items():
+            if len(unit.waiting) >= unit.capacity:
+                self.metrics.setdefault(f"p{port}", []).append("full")
             for out, op, args in unit.waiting:
                 latency, ports = self.core.latencies[op]
                 for arg in args:
@@ -158,6 +163,7 @@ class CPU:
                 else:
                     if self.verbose:
                         print(f"[{self.cycle:>5}] {op} start on u{port}")
+                    self.metrics.setdefault(f"p{port}", []).append("start")
                     self.inflight[out] = latency
                     unit.waiting.remove((out, op, args))
                     break  # This port found its task for this cycle
@@ -173,6 +179,13 @@ class CPU:
     def simulate(self, cycles=10000):
         for _ in range(cycles):
             self.tick()
+        for key, events in sorted(self.metrics.items()):
+            evt_types = set(events)
+            print(f"{key:>10}:", end="")
+            for evt_type in evt_types:
+                pct = events.count(evt_type) / self.cycle if self.cycle else 0
+                print(f" {evt_type:>6} ({pct*100:.1f}%)", end="")
+            print()
         true_instructions = len([op for out, op, args in self.code if op != self.core.isa.mov])
         return self.cycle / (self.retired / true_instructions)
 
