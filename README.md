@@ -18,6 +18,10 @@ $ uv run python3 main.py ts
 This runs a simple TwoSum routine both in simulation and on your
 machine, and then prints its latency.
 
+To compile and run the measurement on a remote machine, pass
+`--ssh <host>` and FPSim will copy the generated files over SSH,
+compile them there and read the results back.
+
 The Apple M1 is currently the best tested and most fully supported
 platform. Support for x86 is planned but currently incomplete, though
 you can test it by passing `--core CL` and running on an x86 machine.
