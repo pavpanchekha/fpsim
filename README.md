@@ -27,6 +27,6 @@ you can test it by passing `--core CL` and running on an x86 machine.
 FPSim offers a couple of interesting features, including:
 
 - Optimal register allocation using an ILP solver (via PuLP)
-- A fine-grained per-port model of CPU execution
+- A fine-grained queue-and-port model of Apple M1 execution
 - Both low-latency and high-throughput TwoSum variants
 - Analytical tuning tools for FPANs, such as finding critical paths
