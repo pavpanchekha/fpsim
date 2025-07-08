@@ -288,6 +288,19 @@ def at3(code, a, b):
         cond = code.vcmpltsd(aa, bb)
         return s, code.vblendvpd(ifa, ifb, cond)
 
+@algorithm
+def at4(code, a, b):
+    s = add(code, a, b)
+    ifa = sub(code, b, sub(code, s, a))
+    ifb = sub(code, a, sub(code, s, b))
+    aa, bb = fabs(code, a), fabs(code, b)
+    if code.isa == ARM:
+        cond = code.fcmge(aa, bb)
+        return s, code.bsl(cond, ifb, ifa)
+    elif code.isa == X86:
+        cond = code.vcmpltsd(aa, bb)
+        return s, code.vblendvpd(ifa, ifb, cond)
+
 @algorithm(ts=ts)
 def ddadd(code, x0, y0, x1, y1, *, ts=ts):
     x0, y0 = ts(code, x0, y0)

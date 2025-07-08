@@ -70,24 +70,30 @@ class Assembler:
         return out
 
     def push_instruction(self, name, args, signature=None):
-        out = self.mkreg()
         if not signature: # Can override for uops
             signature = self.isa.instructions[name]
-        assert "out" in signature.args[0].split()
-        assert len(args) == len(signature.args[1:]), f"{name} wrong number of arguments"
-        if "flags" in signature.args[0].split():
-            self.flags.add(out)
-            self.curflags = out
-        for arg, sig in zip(args, signature.args[1:]):
-            if "flags" in sig.split():
-                assert arg in self.flags, f"{name} argument not a flags register"
-                assert arg == self.curflags, f"{name} argument is not current flags"
-            elif "const" in sig.split():
-                assert isinstance(arg, str), f"{name} argument not a constant"
-            elif "in" in sig.split() or "vector" in sig.split():
-                assert isinstance(arg, int), f"{name} argument not a register"
-        self.code.append([out, name, args])
-        return out
+        argbuf = list(args)
+        out = []
+        for arg in signature.args:
+            flags = arg.split()
+            if "const" in flags:
+                assert argbuf, f"{name} missing a constant argument"
+                argval = argbuf.pop(0)
+                assert isinstance(argval, str), f"{name} argument {argval!r} not a constant"
+            if "in" in flags:
+                assert argbuf, f"{name} missing a register argument"
+                argval = argbuf.pop(0)
+                assert isinstance(argval, int), f"{name} argument {argval!r} not a register"
+                if "flags" in flags:
+                    assert argval == self.curflags, \
+                        f"{name} argument {argval!r} is not current flags"
+            if "out" in flags:
+                out.append(self.mkreg())
+                if "flags" in flags:
+                    self.curflags = out[-1]
+        assert len(out) == 1, f"{name} has {len(out)} output registers"
+        self.code.append([out[0], name, args])
+        return out[0]
 
     def exec(self, f, *args, **kwargs):
         f(self, *args, **kwargs)
