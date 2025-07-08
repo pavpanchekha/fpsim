@@ -71,6 +71,7 @@ class CPU:
         self.uops = Assembler(self.core.isa)
         self.decode_queue = []
         self.units = {p: Schedule() for p in self.core.priority}
+        self.port_use = {p: 0 for p in self.core.priority}
         self.inflight = {}
         self.done = set(self.rat) # Arguments start complete
 
@@ -158,6 +159,7 @@ class CPU:
                 else:
                     if self.verbose:
                         print(f"[{self.cycle:>5}] {op} start on u{port}")
+                    self.port_use[port] += 1
                     self.inflight[out] = latency
                     unit.waiting.remove((out, op, args))
                     break  # This port found its task for this cycle
@@ -173,6 +175,12 @@ class CPU:
     def simulate(self, cycles=10000):
         for _ in range(cycles):
             self.tick()
-        true_instructions = len([op for out, op, args in self.code if op != self.core.isa.mov])
+        for port in sorted(self.port_use):
+            pct = 100 * self.port_use[port] / self.cycle if self.cycle else 0
+            print(f"Port {port}: {pct:.1f}% busy")
+        true_instructions = len([
+            op for out, op, args in self.code
+            if op != self.core.isa.mov
+        ])
         return self.cycle / (self.retired / true_instructions)
 
