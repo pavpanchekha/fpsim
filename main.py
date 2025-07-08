@@ -52,7 +52,6 @@ class Listing:
             copies = int(math.ceil(len(iargs) / max(1, len(oargs))))
             latency_ties = list(zip(iargs, [oarg for oarg in oargs for i in range(copies)]))
             for iarg, oarg in latency_ties:
-                code.ip += 1
                 code.code.append((iarg, code.isa.mov, [oarg]))
             return tuple(oargs)
         return Listing(f, self.kwargs, argnum=self.argnum*instances)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from assembler import ISA, ARM, X86, Assembler
+from assembler import ISA, ARM, X86, Sig, Assembler
 
 @dataclass
 class Core:
@@ -34,8 +34,8 @@ ECORE = Core(ARM, {
 
 # Coffee Lake
 def vblendvpd(code, a, b, mask):
-    q = code.vblendvpd_1(mask, uop=True)
-    return code.vblendvpd_2(a, b, q, uop=True)
+    q = code.vblendvpd_1(mask, signature=Sig("out", "in"))
+    return code.vblendvpd_2(a, b, q, signature=Sig("out", "in", "in", "in"))
 
 CL_CORE = Core(X86, {
     "vaddsd": (4, [0, 1]),
@@ -93,7 +93,7 @@ class CPU:
             if op in self.core.microcode:
                 self.rat[out] = self.core.microcode[op](self.uops, *args)
             else:
-                self.rat[out] = self.uops.push_instruction(op, args, uop=True)
+                self.rat[out] = self.uops.push_instruction(op, args)
         uops = self.uops.code
         self.uops.code = []
         if self.verbose: print(f"[{self.cycle:>5}] decode {inst} ->", uops)

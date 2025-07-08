@@ -33,7 +33,7 @@ ARM = ISA(
         "fcsel": Sig("out", "in flags", "in", "in", suffix="lt"),
         "fmov": Sig("out", "in"),
         "fcmge": Sig("out vector", "in vector", "in vector"),
-        "bsl": Sig("out vector", "in vector", "in vector", "in vector"),
+        "bsl": Sig("in out vector", "in vector", "in vector"),
     },
     mov="fmov",
 )
@@ -59,29 +59,33 @@ X86 = ISA(
 class Assembler:
     def __init__(self, isa: ISA):
         self.isa = isa
-        self.ip = 0
+        self.regs = 0
         self.code = []
         self.flags: set[int] = set()
         self.curflags: typing.Optional[int] = None
 
-    def push_instruction(self, name, args, uop=False):
-        out = self.ip
-        self.ip += 1
-        if not uop:
-            signature = self.isa.instructions[name].args
-            assert "out" in signature[0].split()
-            assert len(args) == len(signature[1:]), f"{name} wrong number of arguments"
-            if "flags" in signature[0].split():
-                self.flags.add(out)
-                self.curflags = out
-            for arg, sig in zip(args, signature[1:]):
-                if "flags" in sig.split():
-                    assert arg in self.flags, f"{name} argument not a flags register"
-                    assert arg == self.curflags, f"{name} argument is not current flags"
-                elif "const" in sig.split():
-                    assert isinstance(arg, str), f"{name} argument not a constant"
-                elif "in" in sig.split() or "vector" in sig.split():
-                    assert isinstance(arg, int), f"{name} argument not a register"
+    def mkreg(self):
+        out = self.regs
+        self.regs += 1
+        return out
+
+    def push_instruction(self, name, args, signature=None):
+        out = self.mkreg()
+        if not signature: # Can override for uops
+            signature = self.isa.instructions[name]
+        assert "out" in signature.args[0].split()
+        assert len(args) == len(signature.args[1:]), f"{name} wrong number of arguments"
+        if "flags" in signature.args[0].split():
+            self.flags.add(out)
+            self.curflags = out
+        for arg, sig in zip(args, signature.args[1:]):
+            if "flags" in sig.split():
+                assert arg in self.flags, f"{name} argument not a flags register"
+                assert arg == self.curflags, f"{name} argument is not current flags"
+            elif "const" in sig.split():
+                assert isinstance(arg, str), f"{name} argument not a constant"
+            elif "in" in sig.split() or "vector" in sig.split():
+                assert isinstance(arg, int), f"{name} argument not a register"
         self.code.append([out, name, args])
         return out
 
@@ -90,4 +94,4 @@ class Assembler:
         return self
 
     def __getattr__(self, name):
-        return lambda *args, uop=False: self.push_instruction(name, args, uop=uop)
+        return lambda *args, **kwargs: self.push_instruction(name, args, **kwargs)
