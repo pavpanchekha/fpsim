@@ -5,7 +5,7 @@ import pulp
 import time
 from assembler import Assembler, ARM, X86
 
-ASM_ITERATIONS = 100_000_000
+ASM_ITERATIONS = 1_000_000
 
 def write_asm(l: Assembler, name, fd, *, verbose=False):
     isa = l.isa
@@ -136,32 +136,41 @@ int main(void) {
 #ifdef __APPLE__
     mach_timebase_info_data_t timebase;
     mach_timebase_info(&timebase);
-
-    uint64_t start = mach_absolute_time();
-#else
-    uint64_t start = __builtin_ia32_rdtsc();
-#endif
-    null_loop();
-#ifdef __APPLE__
-    uint64_t end = mach_absolute_time();
-#else
-    uint64_t end = __builtin_ia32_rdtsc();
-#endif
-    uint64_t baseline = end - start;
-
-#ifdef __APPLE__
-    start = mach_absolute_time();
-#else
-    start = __builtin_ia32_rdtsc();
-#endif
-    bench_loop();
-#ifdef __APPLE__
-    end = mach_absolute_time();
-#else
-    end = __builtin_ia32_rdtsc();
 #endif
 
-    double ticks = end - start - baseline;
+    uint64_t baseline = 0xffffffffull;
+
+    for (int i = 0; i < 100; i++) {
+#ifdef __APPLE__
+      uint64_t start = mach_absolute_time();
+#else
+      uint64_t start = __builtin_ia32_rdtsc();
+#endif
+      null_loop();
+#ifdef __APPLE__
+      uint64_t end = mach_absolute_time();
+#else
+      uint64_t end = __builtin_ia32_rdtsc();
+#endif
+      if (end - start < baseline) baseline = end - start;
+    }
+
+    double ticks = 1.0e308;
+    for (int i = 0; i < 100; i++) {
+#ifdef __APPLE__
+      uint64_t start = mach_absolute_time();
+#else
+      uint64_t start = __builtin_ia32_rdtsc();
+#endif
+      bench_loop();
+#ifdef __APPLE__
+      uint64_t end = mach_absolute_time();
+#else
+      uint64_t end = __builtin_ia32_rdtsc();
+#endif
+      if (end - start - baseline < ticks) ticks = end - start - baseline;
+    }
+
 #ifdef __APPLE__
     double cycles_per = ticks * timebase.numer / timebase.denom * 3.2;
 #else
