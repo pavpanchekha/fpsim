@@ -1,64 +1,15 @@
 import subprocess
 import tempfile
 from pathlib import Path
-import pulp
-import time
 from assembler import Assembler, ARM, X86
+from regalloc import allocate_registers
 
 ASM_ITERATIONS = 1_000_000
 
-def write_asm(l: Assembler, name, fd, *, verbose=False):
-    isa = l.isa
-    regs = set()
-    regstart = {}
-    regend = {}
-    for out, op, args in l.code:
-        if out >= 0:
-            regstart[out] = min(regstart.get(out, out), out)
-            regend[out] = out
-        regs.add(out)
-        for arg in args:
-            if arg < 0:
-                regstart[arg] = -1 # before start
-            if isinstance(arg, str): continue
-            regend[arg] = max(regend.get(arg, out), out)
-            regs.add(arg)
-    iargs = { reg for reg in regs if reg < -1 }
-
-    if verbose: print("Performing register allocation with PuLP")
-    start = time.time()
-    model = pulp.LpProblem(sense=pulp.LpMinimize)
-
-    at = {}
-    for vreg in regs:
-        for preg in range(isa.registers):
-            at[(vreg, preg)] = pulp.LpVariable(f"at_{vreg}_{preg}", cat=pulp.LpBinary)
-
-    for vreg in regs:
-        if vreg in l.flags: continue # Flags don't take up an ISA register
-        # Each v-reg is in exactly one p-reg
-        model += sum(at[vreg, preg] for preg in range(isa.registers)) == 1
-
-    for reg1 in regs:
-        for reg2 in regs:
-            if reg1 == reg2: break
-            if regstart[reg1] < regend[reg2] and regstart[reg2] < regend[reg1]:
-                for preg in range(isa.registers):
-                    # Can't put two interfering v-regs in the same p-reg
-                    model += at[(reg1, preg)] + at[(reg2, preg)] <= 1
-
-    model.solve(pulp.PULP_CBC_CMD(msg=False, timeLimit=10))
-    assert model.status == pulp.LpStatusOptimal, "Too many registers, could not allocate"
-
-    assignment = {}
-    for vreg in regs:
-        for preg in range(isa.registers):
-            if at[(vreg, preg)].value() == 1:
-                assignment[vreg] = preg
-    if verbose: print("  Done in {:.02f}ms with {} registers".format(
-            (time.time() - start) * 1000,
-            len(set(assignment.values())),
-    ))
+def write_asm(code, isa, name, fd, *, iargs=None):
+    """Write ``code`` as assembly for ``isa`` to ``fd``."""
+    if iargs is None:
+        iargs = set()
 
     print(".text", file=fd)
     print(f".global _{name}, {name}", file=fd)
@@ -66,7 +17,7 @@ def write_asm(l: Assembler, name, fd, *, verbose=False):
     print(f"_{name}:", file=fd)
 
     # Prologue
-    if isa == ARM: # No need on x86, all xmm registers caller-saved
+    if isa == ARM:  # No need on x86, all xmm registers caller-saved
         print("  stp    q8,  q9,  [sp, #-32]!", file=fd)
         print("  stp    q10, q11, [sp, #-32]!", file=fd)
         print("  stp    q12, q13, [sp, #-32]!", file=fd)
@@ -74,19 +25,20 @@ def write_asm(l: Assembler, name, fd, *, verbose=False):
 
     if isa == ARM:
         for ireg in iargs:
-            print(f"  fmov d{assignment[ireg]}, #0.0", file=fd)
+            print(f"  fmov d{ireg}, #0.0", file=fd)
         print(f"  ldr x9, ={ASM_ITERATIONS}", file=fd)
     elif isa == X86:
         for ireg in iargs:
-            print(f"  xorpd xmm{assignment[ireg]}, xmm{assignment[ireg]}", file=fd)
+            print(f"  xorpd xmm{ireg}, xmm{ireg}", file=fd)
         print(f"  mov r11, [rip+LOOP_ITERS]", file=fd)
 
     print(".p2align 4", file=fd)
     print("1:", file=fd)
 
-    for out, op, args in l.code:
+    for out, op, args in code:
         # Apple M1 hiccups if you fmov a register to itself, don't do it
-        if op == isa.mov and assignment[out] == assignment[args[0]]: continue
+        if op == isa.mov and out == args[0]:
+            continue
         signature = isa.instructions[op]
         arglist = []
         for arg, sig in zip([out] + list(args), signature.args):
@@ -103,7 +55,7 @@ def write_asm(l: Assembler, name, fd, *, verbose=False):
             if "const" in flags and isinstance(arg, str):
                 arglist.append(f"[rip+{arg}]")
             else:
-                arglist.append(pfx.format(assignment[arg]))
+                arglist.append(pfx.format(arg))
         if signature.suffix:
             arglist.append(signature.suffix)
         print(f"  {op} {', '.join(arglist)}", file=fd)
@@ -199,8 +151,13 @@ def compile_run(code, core, ssh_host=None, verbose=False):
                 print(f"  .quad {ASM_ITERATIONS}", file=f)
                 print(file=f)
 
-            write_asm(Assembler(core.isa), "null_loop", f, verbose=verbose)
-            write_asm(Assembler(core.isa).exec(code.f, *range(-code.argnum, 0)), "bench_loop", f)
+            asm = Assembler(core.isa)
+            ncode, ninputs = allocate_registers(asm)
+            write_asm(ncode, asm.isa, "null_loop", f, iargs=ninputs)
+
+            asm = Assembler(core.isa).exec(code.f, *range(-code.argnum, 0))
+            bcode, binputs = allocate_registers(asm, verbose=verbose)
+            write_asm(bcode, asm.isa, "bench_loop", f, iargs=binputs)
         with open(c_file, "w") as f:
             f.write(DRIVER)
         if verbose:

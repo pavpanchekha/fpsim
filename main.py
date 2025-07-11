@@ -6,7 +6,7 @@ import math
 
 from assembler import ARM, X86, ISA, Sig, Assembler
 from cores import Core, CPU, CORES
-from measure import compile_run, write_asm
+from measure import compile_run
 
 CODES = {}
 
