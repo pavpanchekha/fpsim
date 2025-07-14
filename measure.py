@@ -152,7 +152,7 @@ def compile_run(code, core, ssh_host=None, verbose=False):
                 print(file=f)
 
             asm = Assembler(core.isa)
-            ncode, ninputs = allocate_registers(asm)
+            ncode, ninputs = allocate_registers(asm, verbose=verbose)
             write_asm(ncode, asm.isa, "null_loop", f, iargs=ninputs)
 
             asm = Assembler(core.isa).exec(code.f, *range(-code.argnum, 0))

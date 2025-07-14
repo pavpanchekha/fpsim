@@ -88,19 +88,18 @@ def allocate_registers_simple(asm : Assembler, verbose=False):
                 assignment[out] = reg
                 if verbose: print(f"Assign {out} to {reg}")
                 break
-    for pc, (out, _op, args) in enumerate(asm.code):
-        if verbose: print(f"%{pc}: {out} = {_op} {args}")
+    for pc, (out, op, args) in enumerate(asm.code):
+        if verbose: print(f"%{pc}: {out} = {op} {args}")
         for arg in args:
             assert arg in assignment, f"Argument {arg} not in a register"
             assert reg_status[assignment[arg]] is not False, f"Argument {arg} register {assignment[arg]} is clear"
-        for reg in reg_status:
-            if reg_status[reg] is not False and regend[reg_status[reg]] < pc:
-                reg_status[reg] = False
-                if verbose: print(f"Clear {reg}")
         if out in assignment:
-            assert reg_status[assignment[out]] is False or assignment[out] == assignment[args[0]]
+            assert reg_status[assignment[out]] is False or \
+                reg_status[assignment[out]] is out or \
+                assignment[out] == assignment[args[0]]
+            reg_status[assignment[out]] = out
         else:
-            for reg in reg_status:
+            for reg in reversed(reg_status):
                 if reg_status[reg] is False:
                     reg_status[reg] = out
                     assignment[out] = reg
@@ -109,6 +108,10 @@ def allocate_registers_simple(asm : Assembler, verbose=False):
             else:
                 if verbose: print(f"Count not place {out}")
                 raise NotEnoughRegistersError
+        for reg in reg_status:
+            if reg_status[reg] is not False and regend[reg_status[reg]] <= pc:
+                reg_status[reg] = False
+                if verbose: print(f"Clear {reg}")
         max_regs = max(max_regs, len([i for i in reg_status if reg_status[i] is not False]))
     if verbose: print(f"Done, max {max_regs} regs")
     return iargs, assignment
