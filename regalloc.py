@@ -91,6 +91,7 @@ def allocate_registers_simple(asm : Assembler, verbose=False):
     for pc, (out, op, args) in enumerate(asm.code):
         if verbose: print(f"%{pc}: {out} = {op} {args}")
         for arg in args:
+            if not isinstance(arg, int): continue
             assert arg in assignment, f"Argument {arg} not in a register"
             assert reg_status[assignment[arg]] is not False, f"Argument {arg} register {assignment[arg]} is clear"
         if out in assignment:
