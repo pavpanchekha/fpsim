@@ -254,10 +254,12 @@ def main():
         results = []
         if args.mode != "measure":
             sim = CPU(core, code, verbose=args.verbose).simulate()
-            results.append(f"{sim:.2f} simulated latency")
+            results.append(f"{sim:>5.2f} simulated latency")
         if args.mode != "simulate":
             meas = compile_run(code, core, ssh_host=args.ssh)
-            results.append(f"{meas:.2f} measured latency")
+            results.append(f"{meas:>5.2f} measured latency")
+        instructions = len(Assembler(core.isa).exec(code.f, *range(-code.argnum, 0)).code)
+        results.append(f"{instructions:>2} instructions")
         print(f"{name:>20}: {', '.join(results)}")
 
 if __name__ == "__main__":
