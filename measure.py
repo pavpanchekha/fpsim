@@ -79,6 +79,17 @@ DRIVER = r"""
 #include <stdint.h>
 #ifdef __APPLE__
 #include <mach/mach_time.h>
+#elif defined(__linux__)
+#include <asm/unistd.h>
+#include <linux/perf_event.h>
+#include <sys/ioctl.h>
+#include <string.h>
+#include <unistd.h>
+static long
+perf_event_open(struct perf_event_attr *hw_event, pid_t pid,
+                int cpu, int group_fd, unsigned long flags) {
+    return syscall(__NR_perf_event_open, hw_event, pid, cpu, group_fd, flags);
+}
 #endif
 
 extern void null_loop(void);
@@ -88,6 +99,20 @@ int main(void) {
 #ifdef __APPLE__
     mach_timebase_info_data_t timebase;
     mach_timebase_info(&timebase);
+#elif defined(__linux__)
+    struct perf_event_attr pe;
+    memset(&pe, 0, sizeof(pe));
+    pe.type = PERF_TYPE_HARDWARE;
+    pe.size = sizeof(pe);
+    pe.config = PERF_COUNT_HW_CPU_CYCLES;
+    pe.disabled = 1;
+    pe.exclude_kernel = 1;
+    pe.exclude_hv = 1;
+    int fd = perf_event_open(&pe, 0, -1, -1, 0);
+    if (fd == -1) {
+        perror("perf_event_open");
+        return 1;
+    }
 #endif
 
     uint64_t baseline = 0xffffffffull;
@@ -95,36 +120,53 @@ int main(void) {
     for (int i = 0; i < 100; i++) {
 #ifdef __APPLE__
       uint64_t start = mach_absolute_time();
+      null_loop();
+      uint64_t end = mach_absolute_time();
+      if (end - start < baseline) baseline = end - start;
+#elif defined(__linux__)
+      ioctl(fd, PERF_EVENT_IOC_RESET, 0);
+      ioctl(fd, PERF_EVENT_IOC_ENABLE, 0);
+      null_loop();
+      ioctl(fd, PERF_EVENT_IOC_DISABLE, 0);
+      uint64_t count;
+      read(fd, &count, sizeof(count));
+      if (count < baseline) baseline = count;
 #else
       uint64_t start = __builtin_ia32_rdtsc();
-#endif
       null_loop();
-#ifdef __APPLE__
-      uint64_t end = mach_absolute_time();
-#else
       uint64_t end = __builtin_ia32_rdtsc();
-#endif
       if (end - start < baseline) baseline = end - start;
+#endif
     }
 
     double ticks = 1.0e308;
     for (int i = 0; i < 100; i++) {
 #ifdef __APPLE__
       uint64_t start = mach_absolute_time();
+      bench_loop();
+      uint64_t end = mach_absolute_time();
+      if (end - start - baseline < ticks) ticks = end - start - baseline;
+#elif defined(__linux__)
+      ioctl(fd, PERF_EVENT_IOC_RESET, 0);
+      ioctl(fd, PERF_EVENT_IOC_ENABLE, 0);
+      bench_loop();
+      ioctl(fd, PERF_EVENT_IOC_DISABLE, 0);
+      uint64_t count;
+      read(fd, &count, sizeof(count));
+      if (count - baseline < ticks) ticks = count - baseline;
 #else
       uint64_t start = __builtin_ia32_rdtsc();
-#endif
       bench_loop();
-#ifdef __APPLE__
-      uint64_t end = mach_absolute_time();
-#else
       uint64_t end = __builtin_ia32_rdtsc();
-#endif
       if (end - start - baseline < ticks) ticks = end - start - baseline;
+#endif
     }
 
 #ifdef __APPLE__
     double cycles_per = ticks * timebase.numer / timebase.denom * 3.2;
+#elif defined(__linux__)
+    close(fd);
+    double cycles_per = ticks;
 #else
     double cycles_per = ticks;
 #endif
