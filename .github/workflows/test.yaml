@@ -5,13 +5,14 @@ on: [push]
 jobs:
   test:
     strategy:
-      arch:
-        - name: X86
-          runner: ubuntu-latest
-          core: CL
-        - name: A64
-          runner: macos-13
-          core: P
+      matrix:
+        arch:
+          - name: X86
+            runner: ubuntu-latest
+            core: CL
+          - name: A64
+            runner: macos-13
+            core: P
     runs-on: ${{ matrix.runner }}
     name: "Integration tests (${{ matrix.core }})"
     steps:
