@@ -25,4 +25,6 @@ jobs:
           activate-environment: true
       - run: uname -mrs
       - run: uv sync
+      - run: uv pip install mypy
+      - run: uv run mypy .
       - run: uv run python3 main.py --core ${{ matrix.core }} ts at1 at3 ddadd madd fpan333

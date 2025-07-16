@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import typing
 
-from assembler import ISA, ARM, X86, Sig, Assembler
+from assembler import ISA, ARM, X86, Sig, Assembler, Instruction, Register
 
 @dataclass
 class Core:
@@ -59,7 +60,7 @@ CORES = {
 class Schedule:
     busy : bool = False
     capacity : int = 32
-    waiting: list[tuple[int, str, list[int]]] = field(default_factory=list)
+    waiting: list[Instruction] = field(default_factory=list)
 
 class CPU:
     def __init__(self, core: Core, code, *, verbose: bool = False):
@@ -69,24 +70,25 @@ class CPU:
         # Front-end
         self.pc = 0
         self.rat = { i: i for i in range(-code.argnum, 0) }
-        self.code = Assembler(core.isa).exec(code, *range(-code.argnum, 0)).code
+        self.code: list[Instruction] = Assembler(core.isa).exec(code, *range(-code.argnum, 0)).code
 
         # Back-end
         self.uops = Assembler(self.core.isa)
-        self.decode_queue = []
+        self.decode_queue: list[Instruction] = []
         self.units = {p: Schedule() for p in self.core.priority}
-        self.metrics = {}
-        self.inflight = {}
+        self.metrics: dict[str, list[str]] = {}
+        self.inflight: dict[int, int] = {}
         self.done = set(self.rat) # Arguments start complete
 
         # Perf counters
         self.cycle = 0
         self.retired = 0
 
-    def decode(self, inst):
+    def decode(self, inst: Instruction) -> list[Instruction]:
         out, op, args = inst
         if op == self.core.isa.mov:
             assert len(args) == 1, f"Weird {op} instruction with arguments {args}"
+            assert isinstance(args[0], int)
             self.rat[out] = self.rat[args[0]]
         else:
             args = [self.rat[a] if isinstance(a, int) else a for a in args]
