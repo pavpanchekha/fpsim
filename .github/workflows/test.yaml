@@ -11,6 +11,7 @@ jobs:
           - name: X86
             runner: ubuntu-latest
             core: CL
+            printcpu: lscpu
           - name: A64
             runner: macos-13
             core: P
@@ -22,5 +23,6 @@ jobs:
         uses: astral-sh/setup-uv@v6
         with:
           activate-environment: true
+      - run: uname -mrs
       - run: uv sync
       - run: uv run python3 main.py --core ${{ matrix.core }} ts at1 at3 ddadd madd fpan333
