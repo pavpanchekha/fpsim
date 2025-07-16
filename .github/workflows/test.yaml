@@ -6,7 +6,7 @@ jobs:
   test:
     strategy:
       matrix:
-        arch:
+        include:
           - name: X86
             runner: ubuntu-latest
             core: CL
