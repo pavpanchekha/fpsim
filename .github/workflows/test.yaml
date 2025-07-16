@@ -13,7 +13,7 @@ jobs:
             core: CL
             printcpu: lscpu
           - name: A64
-            runner: macos-13-xlarge
+            runner: macos-14
             core: P
     runs-on: ${{ matrix.runner }}
     name: "Integration tests (${{ matrix.core }})"
