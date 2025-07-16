@@ -5,12 +5,17 @@ on: [push]
 jobs:
   test:
     strategy:
-      matrix:
-        runner: [ 'ubuntu-latest', 'macos-13' ]
-        core: [ 'CL', 'P' ]
+      arch:
+        - name: X86
+          runner: ubuntu-latest
+          core: CL
+        - name: A64
+          runner: macos-13
+          core: P
     runs-on: ${{ matrix.runner }}
     name: "Integration tests (${{ matrix.core }})"
     steps:
+      - uses: actions/checkout@master
       - name: Install the latest version of uv and activate the environment
         uses: astral-sh/setup-uv@v6
         with:
