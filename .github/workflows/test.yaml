@@ -1,0 +1,19 @@
+name: Integration tests
+
+on: [push]
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        runner: [ 'ubuntu-latest', 'macos-13' ]
+        core: [ 'CL', 'P' ]
+    runs-on: ${{ matrix.runner }}
+    name: "Integration tests (${{ matrix.core }})"
+    steps:
+      - name: Install the latest version of uv and activate the environment
+        uses: astral-sh/setup-uv@v6
+        with:
+          activate-environment: true
+      - run: uv sync
+      - run: uv run python3 main.py --core ${{ matrix.core }} ts at1 at3 ddadd madd fpan333
