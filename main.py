@@ -1,6 +1,7 @@
 from functools import wraps
 import inspect
 import sys
+import configparser
 import fpan
 import math
 
@@ -225,12 +226,28 @@ def get_code(name):
 
 def main():
     import argparse
+    # Parse --profile first so that options from the profile can be
+    # treated as if they were passed on the command line.
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument('--profile')
+    pre_args, remaining = pre_parser.parse_known_args()
+
+    profile_args = []
+    if pre_args.profile:
+        cfg = configparser.ConfigParser()
+        cfg.read('profiles.conf')
+        if pre_args.profile not in cfg:
+            pre_parser.error(f"profile '{pre_args.profile}' not found")
+        for key, value in cfg[pre_args.profile].items():
+            profile_args.extend([f'--{key}', value])
+
     # Set up argument parsing
     parser = argparse.ArgumentParser(
         description="Simulate CPU performance for TwoSum variants.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="Available codes: {}".format(", ".join(sorted(CODES.keys())))
     )
+    parser.add_argument('--profile', help='Load options from profiles.conf')
     parser.add_argument('--verbose', action='store_true', help='Enable verbose output')
     parser.add_argument('--core', type=str, default="P", choices=CORES.keys(), help='P-core or E-core')
     parser.add_argument('--instances', type=int, default=1, help='Number of instances')
@@ -239,7 +256,9 @@ def main():
     parser.add_argument('--ssh', type=str, default=None,
                         help='Compile and run on the specified SSH host')
     parser.add_argument('codes', nargs=argparse.REMAINDER, help='Functions to simulate')
-    args = parser.parse_args()
+    args = parser.parse_args(profile_args + remaining)
+    if pre_args.profile:
+        args.profile = pre_args.profile
 
     # Assign flags
     global VERBOSE

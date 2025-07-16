@@ -22,6 +22,19 @@ To compile and run the measurement on a remote machine, pass
 `--ssh <host>` and FPSim will copy the generated files over SSH,
 compile them there and read the results back.
 
+You can also define option sets in `profiles.conf` and load them with
+`--profile SECTION`. Each key in the chosen section is treated as a
+command-line argument. For example:
+
+```
+[nightly]
+ssh=nightlies
+core=CL
+```
+
+Running `--profile nightly` is equivalent to passing
+`--ssh=nightlies --core=CL` on the command line.
+
 The Apple M1 is currently the best tested and most fully supported
 platform. Support for x86 is planned but currently incomplete, though
 you can test it by passing `--core CL` and running on an x86 machine.
