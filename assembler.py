@@ -1,6 +1,12 @@
 from __future__ import annotations
 import typing
 from dataclasses import dataclass
+from typing import TypeAlias
+
+# Basic aliases used throughout the simulator
+Register: TypeAlias = int
+Constant: TypeAlias = str
+Instruction: TypeAlias = tuple[Register, str, list[Register | Constant]]
 
 @dataclass
 class Sig:
@@ -61,16 +67,21 @@ class Assembler:
     def __init__(self, isa: ISA):
         self.isa = isa
         self.regs = 0
-        self.code = []
+        self.code: list[Instruction] = []
         self.flags: set[int] = set()
         self.curflags: typing.Optional[int] = None
 
-    def mkreg(self):
+    def mkreg(self) -> Register:
         out = self.regs
         self.regs += 1
         return out
 
-    def push_instruction(self, name, args, signature=None):
+    def push_instruction(
+        self,
+        name: str,
+        args: typing.Sequence[Register | Constant],
+        signature: Sig | None = None,
+    ) -> Register:
         if not signature: # Can override for uops
             signature = self.isa.instructions[name]
         argbuf = list(args)
@@ -93,12 +104,17 @@ class Assembler:
                 if "flags" in flags:
                     self.curflags = out[-1]
         assert len(out) == 1, f"{name} has {len(out)} output registers"
-        self.code.append([out[0], name, args])
+        self.code.append((out[0], name, list(args)))
         return out[0]
 
-    def exec(self, f, *args, **kwargs):
+    def exec(
+        self,
+        f: typing.Callable[..., typing.Any],
+        *args: Register | Constant,
+        **kwargs: typing.Any,
+    ) -> "Assembler":
         f(self, *args, **kwargs)
         return self
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str) -> typing.Callable[..., Register]:
         return lambda *args, **kwargs: self.push_instruction(name, args, **kwargs)

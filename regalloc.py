@@ -1,10 +1,10 @@
 import time
-import pulp
+import pulp  # type: ignore
 
-from assembler import Assembler
+from assembler import Assembler, Instruction, Register, Constant
 
-def compute_live_ranges(asm):
-    code = asm.code
+def compute_live_ranges(asm: Assembler) -> tuple[set[int], dict[int, int], dict[int, int]]:
+    code: list[Instruction] = asm.code
     isa = asm.isa
 
     regs: set[int] = set()
@@ -26,7 +26,7 @@ def compute_live_ranges(asm):
     
     return regs, regstart, regend
 
-def allocate_registers_ilp(asm: Assembler, verbose = False):
+def allocate_registers_ilp(asm: Assembler, verbose: bool = False) -> tuple[set[int], dict[int, int]]:
     regs, regstart, regend = compute_live_ranges(asm)
     iargs = {r for r in regs if r < 0}
 
@@ -74,12 +74,12 @@ def allocate_registers_ilp(asm: Assembler, verbose = False):
 
 class NotEnoughRegistersError(Exception): pass
 
-def allocate_registers_simple(asm : Assembler, verbose=False):
+def allocate_registers_simple(asm: Assembler, verbose: bool = False) -> tuple[set[int], dict[int, int]]:
     regs, regstart, regend = compute_live_ranges(asm)
     iargs = {r for r in regs if r < 0}
 
-    reg_status = { i: False for i in range(asm.isa.registers) }
-    assignment = {}
+    reg_status: dict[int, int | bool] = {i: False for i in range(asm.isa.registers)}
+    assignment: dict[int, int] = {}
     max_regs = 0
     for out in sorted(iargs):
         for reg in reg_status:
@@ -94,11 +94,11 @@ def allocate_registers_simple(asm : Assembler, verbose=False):
             if not isinstance(arg, int): continue
             assert arg in assignment, f"Argument {arg} not in a register"
             assert reg_status[assignment[arg]] is not False, f"Argument {arg} register {assignment[arg]} is clear"
-        if out in assignment:
-            assert reg_status[assignment[out]] is False or \
-                reg_status[assignment[out]] is out or \
-                assignment[out] == assignment[args[0]]
-            reg_status[assignment[out]] = out
+            if out in assignment:
+                assert reg_status[assignment[out]] is False or \
+                    reg_status[assignment[out]] is out or \
+                    (isinstance(args[0], int) and assignment[out] == assignment[args[0]])
+                reg_status[assignment[out]] = out
         else:
             for reg in reversed(reg_status):
                 if reg_status[reg] is False:
@@ -117,13 +117,13 @@ def allocate_registers_simple(asm : Assembler, verbose=False):
     if verbose: print(f"Done, max {max_regs} regs")
     return iargs, assignment
 
-def allocate_registers(asm, verbose=False):
+def allocate_registers(asm: Assembler, verbose: bool = False) -> tuple[list[Instruction], set[int]]:
     try:
         iargs, assignment = allocate_registers_simple(asm, verbose)
     except NotEnoughRegistersError:
         iargs, assignment = allocate_registers_ilp(asm, verbose)
     
-    allocated: list[tuple[int, str, list[int | str]]] = [
+    allocated: list[Instruction] = [
         (assignment[out], op, [assignment[a] if isinstance(a, int) else a for a in args])
         for out, op, args in asm.code
     ]
